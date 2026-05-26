@@ -1,0 +1,12 @@
+services:
+  teleport:
+    build: .
+    image: teleport:production
+    restart: unless-stopped
+    ports:
+      - "7777:7777"
+    volumes:
+      - teleport-data:/app/data
+
+volumes:
+  teleport-data:

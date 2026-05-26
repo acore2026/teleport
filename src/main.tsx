@@ -1,0 +1,1069 @@
+import React from "react";
+import { createRoot } from "react-dom/client";
+import CryptoJS from "crypto-js";
+import {
+  ChevronDown,
+  Check,
+  Clipboard,
+  Copy,
+  Download,
+  File as FileIcon,
+  FileArchive,
+  FileAudio,
+  FileCode2,
+  FileImage,
+  FileJson,
+  FileSpreadsheet,
+  FileText,
+  FileVideo,
+  FolderUp,
+  HardDriveUpload,
+  Keyboard,
+  Link2,
+  LockKeyhole,
+  Plus,
+  Send,
+  Trash2,
+  UploadCloud,
+  X,
+  Zap,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import "./styles.css";
+
+type RoomItem =
+  | {
+      id: string;
+      room: string;
+      type: "text";
+      textContent: string;
+      bytes: number;
+      createdAt: number;
+      expiresAt: number;
+      hash: string;
+      encrypted?: boolean;
+      cryptoMeta?: CryptoEnvelope | null;
+    }
+  | {
+      id: string;
+      room: string;
+      type: "file";
+      fileName: string;
+      mimeType: string;
+      fileSize: number;
+      downloadUrl: string;
+      createdAt: number;
+      expiresAt: number;
+      hash: string;
+      encrypted?: boolean;
+      cryptoMeta?: CryptoEnvelope | null;
+    };
+
+type RoomPayload = {
+  room: string;
+  items: RoomItem[];
+  ttlMs: number;
+  maxFileBytes: number;
+};
+
+type UploadProgress = {
+  fileName: string;
+  index: number;
+  totalFiles: number;
+  percent: number;
+  loaded: number;
+  total: number;
+  processing: boolean;
+};
+
+type RecentRoom = {
+  room: string;
+  at: number;
+};
+
+type CryptoEnvelope = {
+  v: 1 | 2;
+  cipher: "AES-CBC-HMAC-SHA256";
+  kdf: "PBKDF2-SHA256";
+  iterations: number;
+  salt: string;
+  iv: string;
+  mac: string;
+  data?: string;
+};
+
+const roomKey = "teleport-active-room";
+const recentRoomsKey = "teleport-recent-rooms";
+const roomPasswordsKey = "teleport-room-passwords";
+const textCacheKeyPrefix = "teleport-text-cache";
+const maxFileBytes = 200 * 1024 * 1024;
+const cryptoIterations = 1000;
+const keyCache = new Map<string, { encKey: CryptoJS.lib.WordArray; macKey: CryptoJS.lib.WordArray }>();
+
+function normalizeRoom(value: string) {
+  const room = value.trim().toLowerCase();
+  if (!/^[a-z0-9_-]{1,64}$/.test(room)) {
+    throw new Error("Use letters, numbers, hyphens, or underscores.");
+  }
+  return room;
+}
+
+function initialRoom() {
+  try {
+    const stored = localStorage.getItem(roomKey) || "";
+    if (stored === "my-room") return "";
+    return stored ? normalizeRoom(stored) : "";
+  } catch {
+    return "";
+  }
+}
+
+function readRecentRooms(): RecentRoom[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(recentRoomsKey) || "[]");
+    return Array.isArray(parsed) ? parsed.slice(0, 6) : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberRoom(room: string) {
+  const rooms = readRecentRooms().filter((entry) => entry.room !== room);
+  rooms.unshift({ room, at: Date.now() });
+  localStorage.setItem(recentRoomsKey, JSON.stringify(rooms.slice(0, 6)));
+}
+
+function readRoomPasswords(): Record<string, string> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(roomPasswordsKey) || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function passwordForRoom(room: string) {
+  return readRoomPasswords()[room] || "";
+}
+
+function rememberRoomPassword(room: string, password: string) {
+  const passwords = readRoomPasswords();
+  if (password) passwords[room] = password;
+  else delete passwords[room];
+  localStorage.setItem(roomPasswordsKey, JSON.stringify(passwords));
+}
+
+function textCacheKey(room: string, item: Extract<RoomItem, { type: "text" }>) {
+  return `${textCacheKeyPrefix}:${room}:${item.id}:${item.hash}`;
+}
+
+function readCachedText(room: string, item: Extract<RoomItem, { type: "text" }>) {
+  try {
+    return localStorage.getItem(textCacheKey(room, item));
+  } catch {
+    return null;
+  }
+}
+
+function rememberText(room: string, item: Extract<RoomItem, { type: "text" }>, text: string) {
+  try {
+    localStorage.setItem(textCacheKey(room, item), text);
+  } catch {
+    // Storage can be full or disabled; the network path still works.
+  }
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function timeAgo(value: number) {
+  const seconds = Math.max(1, Math.floor((Date.now() - value) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function timeLeft(value: number) {
+  const minutes = Math.max(0, Math.floor((value - Date.now()) / 60000));
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (hours) return `${hours}h ${rest}m left`;
+  return `${rest}m left`;
+}
+
+function fileExtension(fileName: string) {
+  const match = /\.([a-z0-9]+)$/i.exec(fileName);
+  return match?.[1]?.toLowerCase() || "";
+}
+
+function fileIconFor(item: RoomItem): { Icon: LucideIcon; tone: string; label: string } {
+  if (item.type === "text") return { Icon: Clipboard, tone: "text", label: "text" };
+
+  const extension = fileExtension(item.fileName);
+  const mime = item.mimeType || "";
+  const image = ["avif", "gif", "heic", "jpeg", "jpg", "png", "svg", "webp"];
+  const video = ["avi", "m4v", "mkv", "mov", "mp4", "webm"];
+  const audio = ["aac", "flac", "m4a", "mp3", "ogg", "wav"];
+  const archive = ["7z", "bz2", "gz", "rar", "tar", "tgz", "zip"];
+  const sheet = ["csv", "ods", "tsv", "xls", "xlsx"];
+  const code = ["c", "cpp", "css", "go", "html", "java", "js", "jsx", "py", "rs", "sh", "ts", "tsx"];
+  const json = ["json", "jsonl", "map"];
+  const text = ["log", "md", "rtf", "txt", "yaml", "yml"];
+
+  if (image.includes(extension) || mime.startsWith("image/")) return { Icon: FileImage, tone: "image", label: extension || "image" };
+  if (video.includes(extension) || mime.startsWith("video/")) return { Icon: FileVideo, tone: "video", label: extension || "video" };
+  if (audio.includes(extension) || mime.startsWith("audio/")) return { Icon: FileAudio, tone: "audio", label: extension || "audio" };
+  if (archive.includes(extension)) return { Icon: FileArchive, tone: "archive", label: extension };
+  if (sheet.includes(extension)) return { Icon: FileSpreadsheet, tone: "sheet", label: extension };
+  if (json.includes(extension)) return { Icon: FileJson, tone: "json", label: extension };
+  if (code.includes(extension)) return { Icon: FileCode2, tone: "code", label: extension };
+  if (text.includes(extension) || mime.startsWith("text/")) return { Icon: FileText, tone: "document", label: extension || "text" };
+
+  return { Icon: FileIcon, tone: "file", label: extension || "file" };
+}
+
+function extensionForMime(mimeType: string) {
+  if (mimeType === "image/jpeg") return "jpg";
+  if (mimeType === "image/svg+xml") return "svg";
+  const subtype = mimeType.split("/")[1]?.split(";")[0]?.trim().toLowerCase();
+  return subtype && /^[a-z0-9]+$/.test(subtype) ? subtype : "png";
+}
+
+function namedClipboardFile(file: File, index: number) {
+  if (file.name && file.name !== "image.png") return file;
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const prefix = file.type.startsWith("image/") ? "pasted-image" : "pasted-file";
+  return new File([file], `${prefix}-${stamp}${index ? `-${index + 1}` : ""}.${extensionForMime(file.type)}`, {
+    type: file.type || "application/octet-stream",
+    lastModified: Date.now(),
+  });
+}
+
+function filesFromClipboard(data: DataTransfer) {
+  const files = Array.from(data.files || []);
+  if (files.length) return files.map(namedClipboardFile);
+
+  return Array.from(data.items || [])
+    .filter((item) => item.kind === "file")
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => Boolean(file))
+    .map(namedClipboardFile);
+}
+
+function roomSalt(room: string) {
+  return CryptoJS.SHA256(`teleport:${room}`).toString(CryptoJS.enc.Base64);
+}
+
+function deriveKeys(room: string, password: string, salt: string, iterations: number) {
+  const cacheKey = `${room}:${password}:${salt}:${iterations}`;
+  const cached = keyCache.get(cacheKey);
+  if (cached) return cached;
+
+  const material = CryptoJS.PBKDF2(`${room}:${password}`, CryptoJS.enc.Base64.parse(salt), {
+    keySize: 512 / 32,
+    iterations,
+    hasher: CryptoJS.algo.SHA256,
+  });
+  const keys = {
+    encKey: CryptoJS.lib.WordArray.create(material.words.slice(0, 8), 32),
+    macKey: CryptoJS.lib.WordArray.create(material.words.slice(8, 16), 32),
+  };
+  keyCache.set(cacheKey, keys);
+  return keys;
+}
+
+function stripData(envelope: CryptoEnvelope): CryptoEnvelope {
+  const { data, ...rest } = envelope;
+  return rest;
+}
+
+function sealWordArray(payload: CryptoJS.lib.WordArray, room: string, password: string): CryptoEnvelope {
+  const salt = roomSalt(room);
+  const iv = CryptoJS.lib.WordArray.random(16).toString(CryptoJS.enc.Base64);
+  const keys = deriveKeys(room, password, salt, cryptoIterations);
+  const encrypted = CryptoJS.AES.encrypt(payload, keys.encKey, {
+    iv: CryptoJS.enc.Base64.parse(iv),
+    mode: CryptoJS.mode.CBC,
+    padding: CryptoJS.pad.Pkcs7,
+  });
+  const data = encrypted.ciphertext.toString(CryptoJS.enc.Base64);
+  const mac = CryptoJS.HmacSHA256(`${salt}.${iv}.${data}`, keys.macKey).toString(CryptoJS.enc.Base64);
+  return {
+    v: 2,
+    cipher: "AES-CBC-HMAC-SHA256",
+    kdf: "PBKDF2-SHA256",
+    iterations: cryptoIterations,
+    salt,
+    iv,
+    mac,
+    data,
+  };
+}
+
+function openWordArray(envelope: CryptoEnvelope, data: string, room: string, password: string) {
+  const keys = deriveKeys(room, password, envelope.salt, envelope.iterations || cryptoIterations);
+  const mac = CryptoJS.HmacSHA256(`${envelope.salt}.${envelope.iv}.${data}`, keys.macKey).toString(CryptoJS.enc.Base64);
+  if (mac !== envelope.mac) throw new Error("Unable to open item.");
+  return CryptoJS.AES.decrypt(
+    CryptoJS.lib.CipherParams.create({ ciphertext: CryptoJS.enc.Base64.parse(data) }),
+    keys.encKey,
+    {
+      iv: CryptoJS.enc.Base64.parse(envelope.iv),
+      mode: CryptoJS.mode.CBC,
+      padding: CryptoJS.pad.Pkcs7,
+    },
+  );
+}
+
+function sealText(value: string, room: string, password: string) {
+  return sealWordArray(CryptoJS.enc.Utf8.parse(value), room, password);
+}
+
+function openText(envelope: CryptoEnvelope, data: string, room: string, password: string) {
+  return CryptoJS.enc.Utf8.stringify(openWordArray(envelope, data, room, password));
+}
+
+function readableItem(item: RoomItem, room: string): RoomItem {
+  if (!item.encrypted || item.type !== "text") return item;
+
+  const cached = readCachedText(room, item);
+  if (cached !== null) {
+    return { ...item, textContent: cached, bytes: new Blob([cached]).size };
+  }
+
+  return { ...item, textContent: "", bytes: 0 };
+}
+
+function isPreviewableImage(item: RoomItem) {
+  return item.type === "file" && item.mimeType.startsWith("image/");
+}
+
+async function copyText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const shim = document.createElement("textarea");
+  shim.value = text;
+  shim.setAttribute("readonly", "");
+  shim.className = "copy-shim";
+  document.body.append(shim);
+  shim.select();
+  document.execCommand("copy");
+  shim.remove();
+}
+
+function App() {
+  const initialRoomValue = React.useMemo(initialRoom, []);
+  const [roomInput, setRoomInput] = React.useState(initialRoomValue);
+  const [room, setRoom] = React.useState(initialRoomValue);
+  const [passwordInput, setPasswordInput] = React.useState(() =>
+    initialRoomValue ? passwordForRoom(initialRoomValue) : "",
+  );
+  const [roomPassword, setRoomPassword] = React.useState(() =>
+    initialRoomValue ? passwordForRoom(initialRoomValue) : "",
+  );
+  const [isEditingRoom, setIsEditingRoom] = React.useState(!initialRoomValue);
+  const [items, setItems] = React.useState<RoomItem[]>([]);
+  const [recentRooms, setRecentRooms] = React.useState<RecentRoom[]>(readRecentRooms);
+  const [error, setError] = React.useState("");
+  const [isDragging, setIsDragging] = React.useState(false);
+  const [uploadProgress, setUploadProgress] = React.useState<UploadProgress | null>(null);
+  const [copiedItemId, setCopiedItemId] = React.useState("");
+  const [expandedImage, setExpandedImage] = React.useState<Extract<RoomItem, { type: "file" }> | null>(null);
+  const [cacheVersion, setCacheVersion] = React.useState(0);
+  const pasteBoxRef = React.useRef<HTMLDivElement | null>(null);
+  const visibleItems = React.useMemo(
+    () => items.map((item) => readableItem(item, room)),
+    [items, room, cacheVersion],
+  );
+
+  React.useEffect(() => {
+    if (!room) return undefined;
+
+    loadRoom(room);
+    const events = new EventSource(`/api/rooms/${encodeURIComponent(room)}/events`);
+    events.addEventListener("items", (event) => {
+      const payload = JSON.parse(event.data) as RoomPayload;
+      setItems(payload.items);
+    });
+
+    return () => {
+      events.close();
+    };
+  }, [room]);
+
+  React.useEffect(() => {
+    const timer = setInterval(() => setItems((current) => [...current]), 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  React.useEffect(() => {
+    if (!room) return;
+    rememberRoom(room);
+    setRecentRooms(readRecentRooms());
+  }, []);
+
+  React.useEffect(() => {
+    if (!roomPassword) return undefined;
+    const timer = window.setTimeout(() => {
+      deriveKeys(room, roomPassword, roomSalt(room), cryptoIterations);
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [room, roomPassword]);
+
+  React.useEffect(() => {
+    if (!roomPassword) return undefined;
+
+    const pending = items.filter(
+      (item): item is Extract<RoomItem, { type: "text" }> =>
+        item.type === "text" && Boolean(item.encrypted && item.cryptoMeta) && readCachedText(room, item) === null,
+    );
+    if (!pending.length) return undefined;
+
+    let cancelled = false;
+    let timer = 0;
+    let index = 0;
+
+    const decryptNext = () => {
+      if (cancelled) return;
+      const item = pending[index];
+      index += 1;
+      if (!item) return;
+
+      timer = window.setTimeout(() => {
+        try {
+          const text = openText(item.cryptoMeta as CryptoEnvelope, item.textContent, room, roomPassword);
+          rememberText(room, item, text);
+          setCacheVersion((value) => value + 1);
+        } catch {
+          // Leave the item blank when the local password does not match.
+        }
+        decryptNext();
+      }, 20);
+    };
+
+    timer = window.setTimeout(decryptNext, 120);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [items, room, roomPassword]);
+
+  async function loadRoom(nextRoom: string) {
+    const response = await fetch(`/api/rooms/${encodeURIComponent(nextRoom)}/items`);
+    const payload = (await response.json()) as RoomPayload | { error: string };
+    if (!response.ok) throw new Error("error" in payload ? payload.error : "Unable to load room.");
+    setItems((payload as RoomPayload).items);
+  }
+
+  function enterRoom(value = roomInput, passwordValue?: string) {
+    try {
+      const nextRoom = normalizeRoom(value);
+      const nextPassword = passwordValue ?? passwordInput;
+      setError("");
+      setRoom(nextRoom);
+      setRoomInput(nextRoom);
+      setPasswordInput(nextPassword);
+      setRoomPassword(nextPassword);
+      setIsEditingRoom(false);
+      localStorage.setItem(roomKey, nextRoom);
+      rememberRoomPassword(nextRoom, nextPassword);
+      rememberRoom(nextRoom);
+      setRecentRooms(readRecentRooms());
+      requestAnimationFrame(() => pasteBoxRef.current?.focus());
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Invalid room name.");
+    }
+  }
+
+  async function uploadText(content: string) {
+    const text = content.trimEnd();
+    if (!text.trim()) return;
+    if (!room) {
+      setError("Create or join a room first.");
+      setIsEditingRoom(true);
+      return;
+    }
+
+    setError("");
+    await new Promise((resolve) => {
+      window.setTimeout(resolve, 0);
+    });
+    const sealed = roomPassword ? sealText(text, room, roomPassword) : null;
+    const response = await fetch(`/api/rooms/${encodeURIComponent(room)}/items`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(
+        sealed
+          ? { content: sealed.data, encrypted: true, cryptoMeta: stripData(sealed) }
+          : { content: text },
+      ),
+    });
+    const payload = (await response.json()) as RoomPayload | { error: string };
+    if (!response.ok) {
+      setError("error" in payload ? payload.error : "Text sync failed.");
+      return;
+    }
+
+    const nextItems = (payload as RoomPayload).items;
+    if (sealed) {
+      const saved = nextItems.find(
+        (item): item is Extract<RoomItem, { type: "text" }> =>
+          item.type === "text" && Boolean(item.encrypted) && item.textContent === sealed.data,
+      );
+      if (saved) {
+        rememberText(room, saved, text);
+        setCacheVersion((value) => value + 1);
+      }
+    }
+
+    setItems(nextItems);
+  }
+
+  function uploadFile(file: File, index: number, totalFiles: number) {
+    return new Promise<RoomPayload>((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      const form = new FormData();
+      form.append("file", file);
+
+      setUploadProgress({
+        fileName: file.name,
+        index,
+        totalFiles,
+        percent: 0,
+        loaded: 0,
+        total: file.size,
+        processing: false,
+      });
+
+      request.upload.onprogress = (event) => {
+        const total = event.lengthComputable ? event.total : file.size;
+        const percent = total ? Math.min(99, Math.round((event.loaded / total) * 100)) : 0;
+        setUploadProgress({
+          fileName: file.name,
+          index,
+          totalFiles,
+          percent,
+          loaded: event.loaded,
+          total,
+          processing: false,
+        });
+      };
+
+      request.onload = () => {
+        let payload: RoomPayload | { error: string };
+        try {
+          payload = JSON.parse(request.responseText || "{}");
+        } catch {
+          reject(new Error("Upload response was invalid."));
+          return;
+        }
+
+        if (request.status < 200 || request.status >= 300) {
+          reject(new Error("error" in payload ? payload.error : `Upload failed for ${file.name}.`));
+          return;
+        }
+
+        setUploadProgress({
+          fileName: file.name,
+          index,
+          totalFiles,
+          percent: 100,
+          loaded: file.size,
+          total: file.size,
+          processing: true,
+        });
+        resolve(payload as RoomPayload);
+      };
+
+      request.onerror = () => reject(new Error(`Upload failed for ${file.name}.`));
+      request.open("POST", `/api/rooms/${encodeURIComponent(room)}/items`);
+      request.send(form);
+    });
+  }
+
+  async function uploadFiles(files: FileList | File[]) {
+    if (!room) {
+      setError("Create or join a room first.");
+      setIsEditingRoom(true);
+      return;
+    }
+
+    const batch = Array.from(files);
+    if (!batch.length) return;
+
+    setError("");
+    for (let i = 0; i < batch.length; i += 1) {
+      const file = batch[i];
+      if (file.size > maxFileBytes) {
+        setError(`${file.name} is larger than 200 MB.`);
+        continue;
+      }
+
+      try {
+        const payload = await uploadFile(file, i + 1, batch.length);
+        setItems(payload.items);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : `Upload failed for ${file.name}.`);
+      }
+    }
+
+    setTimeout(() => setUploadProgress(null), 900);
+  }
+
+  async function deleteItem(item: RoomItem) {
+    const response = await fetch(
+      `/api/rooms/${encodeURIComponent(room)}/items/${encodeURIComponent(item.id)}`,
+      { method: "DELETE" },
+    );
+    const payload = (await response.json()) as RoomPayload | { error: string };
+    if (response.ok) setItems((payload as RoomPayload).items);
+  }
+
+  async function copyItem(item: RoomItem) {
+    if (item.type === "file") {
+      await copyText(new URL(item.downloadUrl, window.location.href).href);
+    } else if (item.textContent) {
+      await copyText(item.textContent);
+    } else {
+      return;
+    }
+
+    setCopiedItemId(item.id);
+    window.setTimeout(() => {
+      setCopiedItemId((current) => (current === item.id ? "" : current));
+    }, 1300);
+  }
+
+  async function downloadItem(item: RoomItem) {
+    if (item.type !== "file") return;
+    window.open(item.downloadUrl, "_blank", "noopener,noreferrer");
+  }
+
+  return (
+    <main className="min-h-screen">
+      <header className="title-bar">
+        <div className="title-inner">
+          <div className="brand">
+            <span className="brand-icon" aria-hidden="true">
+              <Zap size={18} fill="currentColor" />
+            </span>
+            <h1>teleport</h1>
+          </div>
+
+          <div className="room-control">
+            {room ? (
+              <button
+                className="joined-pill"
+                onClick={() => {
+                  setRoomInput(room);
+                  setPasswordInput(roomPassword);
+                  setIsEditingRoom((value) => !value);
+                }}
+                aria-expanded={isEditingRoom}
+                aria-label={`Change room, currently ${room}`}
+                title="Change room"
+              >
+                <span>{room}</span>
+                <Check className="joined-check" size={16} />
+                <ChevronDown className="room-chevron" size={15} />
+              </button>
+            ) : (
+              <button className="create-room-pill" onClick={() => setIsEditingRoom(true)}>
+                <Plus size={16} />
+                Create room
+              </button>
+            )}
+
+            {room && isEditingRoom && (
+              <div className="room-popover" role="dialog" aria-label="Switch room">
+                <RoomPrompt
+                  room={room}
+                  roomInput={roomInput}
+                  passwordInput={passwordInput}
+                  recentRooms={recentRooms}
+                  error={error}
+                  autoFocus
+                  onRoomInput={setRoomInput}
+                  onPasswordInput={setPasswordInput}
+                  onSubmit={() => enterRoom()}
+                  onCancel={() => {
+                    setRoomInput(room);
+                    setPasswordInput(roomPassword);
+                    setIsEditingRoom(false);
+                  }}
+                  onRecentRoom={(nextRoom) => enterRoom(nextRoom, passwordForRoom(nextRoom))}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      </header>
+
+      <section className="workspace">
+        <div className="drop-column">
+          <section className="drop-panel">
+            <h2>Paste or drop</h2>
+            <div
+              ref={pasteBoxRef}
+              tabIndex={0}
+              role="textbox"
+              aria-label="Paste or drop box"
+              className={`paste-box ${isDragging ? "paste-box-dragging" : ""}`}
+              onPaste={(event) => {
+                const files = filesFromClipboard(event.clipboardData);
+                if (files.length) {
+                  event.preventDefault();
+                  uploadFiles(files);
+                  return;
+                }
+
+                const text = event.clipboardData.getData("text/plain");
+                if (text.trim()) {
+                  event.preventDefault();
+                  uploadText(text);
+                }
+              }}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setIsDragging(true);
+              }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={(event) => {
+                event.preventDefault();
+                setIsDragging(false);
+                uploadFiles(event.dataTransfer.files);
+              }}
+            >
+              <span className="drop-icon">
+                <UploadCloud size={44} strokeWidth={1.75} />
+              </span>
+              <div>
+                <h3>Paste text or drop files</h3>
+                <p>{room ? `Synced to room ${room} instantly` : "Create a room to start syncing instantly"}</p>
+              </div>
+              <div className="guidance-row">
+                <span>
+                  <Keyboard size={14} />
+                  Ctrl/⌘ + V
+                </span>
+                <span>
+                  <FolderUp size={14} />
+                  Drag files
+                </span>
+                <span>
+                  <HardDriveUpload size={14} />
+                  200 MB max
+                </span>
+              </div>
+
+              {uploadProgress && <UploadPrompt progress={uploadProgress} />}
+            </div>
+          </section>
+
+          <section className="recent-panel">
+            <h2>Recent rooms</h2>
+            <div className="recent-list">
+              {recentRooms.length ? (
+                recentRooms.map((entry) => (
+                  <button
+                    key={entry.room}
+                    className={entry.room === room ? "recent-chip recent-chip-active" : "recent-chip"}
+                    onClick={() => enterRoom(entry.room, passwordForRoom(entry.room))}
+                  >
+                    <Link2 size={15} />
+                    {entry.room}
+                  </button>
+                ))
+              ) : (
+                <p>No recent rooms yet.</p>
+              )}
+            </div>
+          </section>
+
+          {error && <p className="error-line">{error}</p>}
+        </div>
+
+        <section className="items-panel">
+          <div className="items-head">
+            <p>Recent pastes</p>
+          </div>
+
+          {visibleItems.length ? (
+            <ol className="items-list">
+              {visibleItems.map((item) => (
+                <ItemCard
+                  key={item.id}
+                  item={item}
+                  isCopied={copiedItemId === item.id}
+                  onCopy={copyItem}
+                  onDelete={deleteItem}
+                  onDownload={downloadItem}
+                  onPreview={setExpandedImage}
+                />
+              ))}
+            </ol>
+          ) : (
+            <div className="empty-state">
+              <FileCode2 size={34} />
+              <p>{room ? "Paste text or drop a file to start syncing." : "Create a room to start syncing."}</p>
+            </div>
+          )}
+        </section>
+      </section>
+
+      {!room && isEditingRoom && (
+        <div className="room-intro-overlay" role="dialog" aria-modal="true" aria-label="Create or join a room">
+          <div className="room-intro-card">
+            <div className="intro-brand">
+              <span className="intro-mark" aria-hidden="true">
+                <Zap size={20} fill="currentColor" />
+              </span>
+              <span>teleport</span>
+            </div>
+            <h2>Create or join a room</h2>
+            <p className="intro-copy">Pick a short room name. Everyone using the same room sees the same paste list.</p>
+            <RoomPrompt
+              room={room}
+              roomInput={roomInput}
+              passwordInput={passwordInput}
+              recentRooms={recentRooms}
+              error={error}
+              autoFocus
+              compact
+              onRoomInput={setRoomInput}
+              onPasswordInput={setPasswordInput}
+              onSubmit={() => enterRoom()}
+              onRecentRoom={(nextRoom) => enterRoom(nextRoom, passwordForRoom(nextRoom))}
+            />
+          </div>
+        </div>
+      )}
+
+      {expandedImage && (
+        <div className="image-modal" role="dialog" aria-modal="true" onClick={() => setExpandedImage(null)}>
+          <div className="image-modal-inner" onClick={(event) => event.stopPropagation()}>
+            <button className="image-modal-close" onClick={() => setExpandedImage(null)} aria-label="Close preview">
+              <X size={18} />
+            </button>
+            <img src={expandedImage.downloadUrl} alt={expandedImage.fileName} />
+            <p>{expandedImage.fileName}</p>
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}
+
+function RoomPrompt({
+  room,
+  roomInput,
+  passwordInput,
+  recentRooms,
+  error,
+  autoFocus,
+  compact,
+  onRoomInput,
+  onPasswordInput,
+  onSubmit,
+  onCancel,
+  onRecentRoom,
+}: {
+  room: string;
+  roomInput: string;
+  passwordInput: string;
+  recentRooms: RecentRoom[];
+  error: string;
+  autoFocus?: boolean;
+  compact?: boolean;
+  onRoomInput: (value: string) => void;
+  onPasswordInput: (value: string) => void;
+  onSubmit: () => void;
+  onCancel?: () => void;
+  onRecentRoom: (room: string) => void;
+}) {
+  const usableRooms = recentRooms.filter((entry) => entry.room !== room);
+
+  return (
+    <div className={compact ? "room-prompt room-prompt-compact" : "room-prompt"}>
+      {!compact && (
+        <div className="room-prompt-head">
+          <div>
+            <h2>Switch room</h2>
+            <p>Create a new room or jump back to a recent one.</p>
+          </div>
+          {onCancel && (
+            <button className="room-close" type="button" onClick={onCancel} aria-label="Close room switcher">
+              <X size={16} />
+            </button>
+          )}
+        </div>
+      )}
+
+      <form
+        className="room-switch-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && onCancel) onCancel();
+        }}
+      >
+        <label>
+          <span>
+            <Link2 size={14} />
+            Room
+          </span>
+          <input
+            autoFocus={autoFocus}
+            value={roomInput}
+            onChange={(event) => onRoomInput(event.target.value)}
+            onFocus={(event) => event.currentTarget.select()}
+            aria-label="Room name"
+          />
+        </label>
+
+        <label>
+          <span>
+            <LockKeyhole size={14} />
+            Password
+          </span>
+          <input
+            type="password"
+            value={passwordInput}
+            onChange={(event) => onPasswordInput(event.target.value)}
+            placeholder="optional"
+            aria-label="Room password"
+          />
+        </label>
+
+        {error && <p className="room-form-error">{error}</p>}
+
+        <div className="room-actions">
+          {onCancel && (
+            <button className="room-secondary" type="button" onClick={onCancel}>
+              Cancel
+            </button>
+          )}
+          <button className="room-primary" type="submit">
+            <Send size={15} />
+            {room ? "Switch" : "Enter room"}
+          </button>
+        </div>
+      </form>
+
+      {usableRooms.length > 0 && (
+        <div className="room-recents">
+          <p>Recent rooms</p>
+          <div>
+            {usableRooms.map((entry) => (
+              <button key={entry.room} type="button" onClick={() => onRecentRoom(entry.room)}>
+                <Link2 size={14} />
+                {entry.room}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function UploadPrompt({ progress }: { progress: UploadProgress }) {
+  return (
+    <div className="upload-prompt" aria-live="polite">
+      <div className="upload-prompt-head">
+        <strong>{progress.fileName}</strong>
+        <span>
+          {progress.index}/{progress.totalFiles}
+        </span>
+      </div>
+      <div className="progress-track">
+        <div style={{ width: `${progress.percent}%` }} />
+      </div>
+      <p>
+        {progress.processing
+          ? "Processing..."
+          : `${progress.percent}% · ${formatBytes(progress.loaded)} / ${formatBytes(progress.total)}`}
+      </p>
+    </div>
+  );
+}
+
+function ItemCard({
+  item,
+  onCopy,
+  onDelete,
+  onDownload,
+  onPreview,
+  isCopied,
+}: {
+  item: RoomItem;
+  isCopied: boolean;
+  onCopy: (item: RoomItem) => void;
+  onDelete: (item: RoomItem) => void;
+  onDownload: (item: RoomItem) => void;
+  onPreview: (item: Extract<RoomItem, { type: "file" }>) => void;
+}) {
+  const title = item.type === "file" ? item.fileName : "Text paste";
+  const icon = fileIconFor(item);
+  const Icon = icon.Icon;
+  const isImage = isPreviewableImage(item);
+  const meta =
+    item.type === "file"
+      ? [formatBytes(item.fileSize), icon.label, timeLeft(item.expiresAt)]
+      : [timeAgo(item.createdAt), timeLeft(item.expiresAt)];
+
+  return (
+    <li className={isCopied ? "item-card item-card-copied" : "item-card"}>
+      {isImage && item.type === "file" ? (
+        <button className="item-thumb" onClick={() => onPreview(item)} aria-label={`Preview ${item.fileName}`}>
+          <img src={item.downloadUrl} alt="" loading="lazy" />
+        </button>
+      ) : (
+        <div className={`item-icon item-icon-${icon.tone}`}>
+          <Icon size={20} />
+        </div>
+      )}
+      <div className="item-body">
+        <div className="item-meta">
+          <h4>{title}</h4>
+          {meta.map((value) => (
+            <span key={value}>{value}</span>
+          ))}
+        </div>
+        {item.type === "text" && <pre>{item.textContent}</pre>}
+      </div>
+      <div className="item-actions">
+        <button className={isCopied ? "copy-action copy-action-done" : "copy-action"} onClick={() => onCopy(item)}>
+          {isCopied ? <Check size={15} /> : <Copy size={15} />}
+          <span>{isCopied ? "Copied" : item.type === "file" ? "Copy link" : "Copy"}</span>
+        </button>
+        {item.type === "file" && (
+          <button className="primary-action" onClick={() => onDownload(item)}>
+            <Download size={15} />
+            Download
+          </button>
+        )}
+        <button className="danger" onClick={() => onDelete(item)}>
+          <Trash2 size={15} />
+        </button>
+      </div>
+    </li>
+  );
+}
+
+createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+);

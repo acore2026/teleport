@@ -1,6 +1,9 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import CryptoJS from "crypto-js";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { register, unregister } from "@tauri-apps/plugin-global-shortcut";
+import { Store } from "@tauri-apps/plugin-store";
 import {
   ChevronDown,
   Check,
@@ -95,10 +98,75 @@ type CryptoEnvelope = {
 const roomKey = "teleport-active-room";
 const recentRoomsKey = "teleport-recent-rooms";
 const roomPasswordsKey = "teleport-room-passwords";
+const serverUrlKey = "teleport-server-url";
+const defaultDesktopServerUrl = "http://101.245.78.174:7777";
 const textCacheKeyPrefix = "teleport-text-cache";
 const maxFileBytes = 200 * 1024 * 1024;
 const cryptoIterations = 1000;
 const keyCache = new Map<string, { encKey: CryptoJS.lib.WordArray; macKey: CryptoJS.lib.WordArray }>();
+const desktopSettingsFile = "settings.json";
+
+function isDesktopRuntime() {
+  try {
+    return isTauri();
+  } catch {
+    return false;
+  }
+}
+
+function initialServerUrl() {
+  if (!isDesktopRuntime()) return "";
+  try {
+    return localStorage.getItem(serverUrlKey) || defaultDesktopServerUrl;
+  } catch {
+    return defaultDesktopServerUrl;
+  }
+}
+
+function normalizeServerUrl(value: string) {
+  const url = value.trim().replace(/\/+$/, "");
+  if (!url) return "";
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error("Server must start with http:// or https://.");
+  }
+  return url;
+}
+
+function apiUrl(path: string, serverUrl: string) {
+  return serverUrl ? `${serverUrl}${path}` : path;
+}
+
+function absoluteItemUrl(downloadUrl: string, serverUrl: string) {
+  if (/^https?:\/\//i.test(downloadUrl)) return downloadUrl;
+  return serverUrl ? `${serverUrl}${downloadUrl}` : new URL(downloadUrl, window.location.href).href;
+}
+
+async function loadDesktopStore() {
+  if (!isDesktopRuntime()) return null;
+  return Store.load(desktopSettingsFile, { defaults: {}, autoSave: true });
+}
+
+async function keychainGet(room: string) {
+  if (!isDesktopRuntime()) return passwordForRoom(room);
+  try {
+    return (await invoke<string | null>("keychain_get", { room })) || "";
+  } catch {
+    return "";
+  }
+}
+
+async function keychainSet(room: string, password: string) {
+  if (!isDesktopRuntime()) {
+    rememberRoomPassword(room, password);
+    return;
+  }
+  try {
+    if (password) await invoke("keychain_set", { room, password });
+    else await invoke("keychain_delete", { room });
+  } catch {
+    // The room can still be used; the password just will not persist.
+  }
+}
 
 function normalizeRoom(value: string) {
   const room = value.trim().toLowerCase();
@@ -361,14 +429,18 @@ async function copyText(text: string) {
 }
 
 function App() {
+  const desktopMode = React.useMemo(isDesktopRuntime, []);
   const initialRoomValue = React.useMemo(initialRoom, []);
+  const initialServerValue = React.useMemo(initialServerUrl, []);
   const [roomInput, setRoomInput] = React.useState(initialRoomValue);
   const [room, setRoom] = React.useState(initialRoomValue);
+  const [serverInput, setServerInput] = React.useState(initialServerValue);
+  const [serverUrl, setServerUrl] = React.useState(initialServerValue);
   const [passwordInput, setPasswordInput] = React.useState(() =>
-    initialRoomValue ? passwordForRoom(initialRoomValue) : "",
+    initialRoomValue && !desktopMode ? passwordForRoom(initialRoomValue) : "",
   );
   const [roomPassword, setRoomPassword] = React.useState(() =>
-    initialRoomValue ? passwordForRoom(initialRoomValue) : "",
+    initialRoomValue && !desktopMode ? passwordForRoom(initialRoomValue) : "",
   );
   const [isEditingRoom, setIsEditingRoom] = React.useState(!initialRoomValue);
   const [items, setItems] = React.useState<RoomItem[]>([]);
@@ -380,6 +452,7 @@ function App() {
   const [expandedImage, setExpandedImage] = React.useState<Extract<RoomItem, { type: "file" }> | null>(null);
   const [cacheVersion, setCacheVersion] = React.useState(0);
   const pasteBoxRef = React.useRef<HTMLDivElement | null>(null);
+  const desktopStoreRef = React.useRef<Store | null>(null);
   const visibleItems = React.useMemo(
     () => items.map((item) => readableItem(item, room)),
     [items, room, cacheVersion],
@@ -388,8 +461,10 @@ function App() {
   React.useEffect(() => {
     if (!room) return undefined;
 
-    loadRoom(room);
-    const events = new EventSource(`/api/rooms/${encodeURIComponent(room)}/events`);
+    loadRoom(room).catch((caught) => {
+      setError(caught instanceof Error ? caught.message : "Unable to load room.");
+    });
+    const events = new EventSource(apiUrl(`/api/rooms/${encodeURIComponent(room)}/events`, serverUrl));
     events.addEventListener("items", (event) => {
       const payload = JSON.parse(event.data) as RoomPayload;
       setItems(payload.items);
@@ -398,7 +473,64 @@ function App() {
     return () => {
       events.close();
     };
-  }, [room]);
+  }, [room, serverUrl]);
+
+  React.useEffect(() => {
+    if (!desktopMode) return undefined;
+
+    let cancelled = false;
+    loadDesktopStore()
+      .then(async (store) => {
+        if (!store || cancelled) return;
+        desktopStoreRef.current = store;
+        const storedServerUrl = normalizeServerUrl((await store.get<string>(serverUrlKey)) || initialServerValue);
+        const storedRoom = (await store.get<string>(roomKey)) || initialRoomValue;
+        const nextRoom = storedRoom ? normalizeRoom(storedRoom) : "";
+        const nextPassword = nextRoom ? await keychainGet(nextRoom) : "";
+
+        if (cancelled) return;
+        setServerUrl(storedServerUrl || defaultDesktopServerUrl);
+        setServerInput(storedServerUrl || defaultDesktopServerUrl);
+        if (nextRoom) {
+          setRoom(nextRoom);
+          setRoomInput(nextRoom);
+          setRoomPassword(nextPassword);
+          setPasswordInput(nextPassword);
+          setIsEditingRoom(false);
+        }
+      })
+      .catch(() => {
+        // Local storage remains the fallback.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopMode, initialRoomValue, initialServerValue]);
+
+  React.useEffect(() => {
+    if (!desktopMode) return undefined;
+
+    let mounted = true;
+    register("CommandOrControl+Shift+V", async (event) => {
+      if (event.state !== "Pressed") return;
+      try {
+        await invoke("focus_main_window");
+      } catch {
+        // Browser focus still happens below if the window is already visible.
+      }
+      window.setTimeout(() => {
+        if (mounted) pasteBoxRef.current?.focus();
+      }, 80);
+    }).catch(() => {
+      // The shortcut may already be reserved by the OS or another app.
+    });
+
+    return () => {
+      mounted = false;
+      unregister("CommandOrControl+Shift+V").catch(() => undefined);
+    };
+  }, [desktopMode]);
 
   React.useEffect(() => {
     const timer = setInterval(() => setItems((current) => [...current]), 30000);
@@ -458,30 +590,45 @@ function App() {
   }, [items, room, roomPassword]);
 
   async function loadRoom(nextRoom: string) {
-    const response = await fetch(`/api/rooms/${encodeURIComponent(nextRoom)}/items`);
+    const response = await fetch(apiUrl(`/api/rooms/${encodeURIComponent(nextRoom)}/items`, serverUrl));
     const payload = (await response.json()) as RoomPayload | { error: string };
     if (!response.ok) throw new Error("error" in payload ? payload.error : "Unable to load room.");
     setItems((payload as RoomPayload).items);
   }
 
-  function enterRoom(value = roomInput, passwordValue?: string) {
+  async function enterRoom(value = roomInput, passwordValue?: string) {
     try {
       const nextRoom = normalizeRoom(value);
+      const nextServerUrl = desktopMode ? normalizeServerUrl(serverInput) || defaultDesktopServerUrl : "";
       const nextPassword = passwordValue ?? passwordInput;
       setError("");
+      setServerUrl(nextServerUrl);
+      setServerInput(nextServerUrl);
       setRoom(nextRoom);
       setRoomInput(nextRoom);
       setPasswordInput(nextPassword);
       setRoomPassword(nextPassword);
       setIsEditingRoom(false);
       localStorage.setItem(roomKey, nextRoom);
-      rememberRoomPassword(nextRoom, nextPassword);
+      localStorage.setItem(serverUrlKey, nextServerUrl);
+      await keychainSet(nextRoom, nextPassword);
       rememberRoom(nextRoom);
       setRecentRooms(readRecentRooms());
+      if (desktopStoreRef.current) {
+        await desktopStoreRef.current.set(roomKey, nextRoom);
+        await desktopStoreRef.current.set(serverUrlKey, nextServerUrl);
+      }
       requestAnimationFrame(() => pasteBoxRef.current?.focus());
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Invalid room name.");
     }
+  }
+
+  async function enterRecentRoom(nextRoom: string) {
+    setRoomInput(nextRoom);
+    const nextPassword = await keychainGet(nextRoom);
+    setPasswordInput(nextPassword);
+    await enterRoom(nextRoom, nextPassword);
   }
 
   async function uploadText(content: string) {
@@ -498,7 +645,7 @@ function App() {
       window.setTimeout(resolve, 0);
     });
     const sealed = roomPassword ? sealText(text, room, roomPassword) : null;
-    const response = await fetch(`/api/rooms/${encodeURIComponent(room)}/items`, {
+    const response = await fetch(apiUrl(`/api/rooms/${encodeURIComponent(room)}/items`, serverUrl), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(
@@ -585,7 +732,7 @@ function App() {
       };
 
       request.onerror = () => reject(new Error(`Upload failed for ${file.name}.`));
-      request.open("POST", `/api/rooms/${encodeURIComponent(room)}/items`);
+      request.open("POST", apiUrl(`/api/rooms/${encodeURIComponent(room)}/items`, serverUrl));
       request.send(form);
     });
   }
@@ -621,7 +768,7 @@ function App() {
 
   async function deleteItem(item: RoomItem) {
     const response = await fetch(
-      `/api/rooms/${encodeURIComponent(room)}/items/${encodeURIComponent(item.id)}`,
+      apiUrl(`/api/rooms/${encodeURIComponent(room)}/items/${encodeURIComponent(item.id)}`, serverUrl),
       { method: "DELETE" },
     );
     const payload = (await response.json()) as RoomPayload | { error: string };
@@ -630,7 +777,7 @@ function App() {
 
   async function copyItem(item: RoomItem) {
     if (item.type === "file") {
-      await copyText(new URL(item.downloadUrl, window.location.href).href);
+      await copyText(absoluteItemUrl(item.downloadUrl, serverUrl));
     } else if (item.textContent) {
       await copyText(item.textContent);
     } else {
@@ -645,7 +792,7 @@ function App() {
 
   async function downloadItem(item: RoomItem) {
     if (item.type !== "file") return;
-    window.open(item.downloadUrl, "_blank", "noopener,noreferrer");
+    window.open(absoluteItemUrl(item.downloadUrl, serverUrl), "_blank", "noopener,noreferrer");
   }
 
   return (
@@ -689,18 +836,21 @@ function App() {
                   room={room}
                   roomInput={roomInput}
                   passwordInput={passwordInput}
+                  serverInput={serverInput}
                   recentRooms={recentRooms}
                   error={error}
+                  showServer={desktopMode}
                   autoFocus
                   onRoomInput={setRoomInput}
                   onPasswordInput={setPasswordInput}
+                  onServerInput={setServerInput}
                   onSubmit={() => enterRoom()}
                   onCancel={() => {
                     setRoomInput(room);
                     setPasswordInput(roomPassword);
                     setIsEditingRoom(false);
                   }}
-                  onRecentRoom={(nextRoom) => enterRoom(nextRoom, passwordForRoom(nextRoom))}
+                  onRecentRoom={enterRecentRoom}
                 />
               </div>
             )}
@@ -777,7 +927,7 @@ function App() {
                   <button
                     key={entry.room}
                     className={entry.room === room ? "recent-chip recent-chip-active" : "recent-chip"}
-                    onClick={() => enterRoom(entry.room, passwordForRoom(entry.room))}
+                    onClick={() => enterRecentRoom(entry.room)}
                   >
                     <Link2 size={15} />
                     {entry.room}
@@ -808,6 +958,7 @@ function App() {
                   onDelete={deleteItem}
                   onDownload={downloadItem}
                   onPreview={setExpandedImage}
+                  getItemUrl={(itemUrl) => absoluteItemUrl(itemUrl, serverUrl)}
                 />
               ))}
             </ol>
@@ -835,14 +986,17 @@ function App() {
               room={room}
               roomInput={roomInput}
               passwordInput={passwordInput}
+              serverInput={serverInput}
               recentRooms={recentRooms}
               error={error}
+              showServer={desktopMode}
               autoFocus
               compact
               onRoomInput={setRoomInput}
               onPasswordInput={setPasswordInput}
+              onServerInput={setServerInput}
               onSubmit={() => enterRoom()}
-              onRecentRoom={(nextRoom) => enterRoom(nextRoom, passwordForRoom(nextRoom))}
+              onRecentRoom={enterRecentRoom}
             />
           </div>
         </div>
@@ -854,7 +1008,7 @@ function App() {
             <button className="image-modal-close" onClick={() => setExpandedImage(null)} aria-label="Close preview">
               <X size={18} />
             </button>
-            <img src={expandedImage.downloadUrl} alt={expandedImage.fileName} />
+            <img src={absoluteItemUrl(expandedImage.downloadUrl, serverUrl)} alt={expandedImage.fileName} />
             <p>{expandedImage.fileName}</p>
           </div>
         </div>
@@ -867,12 +1021,15 @@ function RoomPrompt({
   room,
   roomInput,
   passwordInput,
+  serverInput,
   recentRooms,
   error,
   autoFocus,
   compact,
+  showServer,
   onRoomInput,
   onPasswordInput,
+  onServerInput,
   onSubmit,
   onCancel,
   onRecentRoom,
@@ -880,15 +1037,18 @@ function RoomPrompt({
   room: string;
   roomInput: string;
   passwordInput: string;
+  serverInput: string;
   recentRooms: RecentRoom[];
   error: string;
   autoFocus?: boolean;
   compact?: boolean;
+  showServer?: boolean;
   onRoomInput: (value: string) => void;
   onPasswordInput: (value: string) => void;
-  onSubmit: () => void;
+  onServerInput: (value: string) => void;
+  onSubmit: () => void | Promise<void>;
   onCancel?: () => void;
-  onRecentRoom: (room: string) => void;
+  onRecentRoom: (room: string) => void | Promise<void>;
 }) {
   const usableRooms = recentRooms.filter((entry) => entry.room !== room);
 
@@ -931,6 +1091,21 @@ function RoomPrompt({
             aria-label="Room name"
           />
         </label>
+
+        {showServer && (
+          <label>
+            <span>
+              <HardDriveUpload size={14} />
+              Server
+            </span>
+            <input
+              value={serverInput}
+              onChange={(event) => onServerInput(event.target.value)}
+              placeholder={defaultDesktopServerUrl}
+              aria-label="Server URL"
+            />
+          </label>
+        )}
 
         <label>
           <span>
@@ -1005,6 +1180,7 @@ function ItemCard({
   onDelete,
   onDownload,
   onPreview,
+  getItemUrl,
   isCopied,
 }: {
   item: RoomItem;
@@ -1013,6 +1189,7 @@ function ItemCard({
   onDelete: (item: RoomItem) => void;
   onDownload: (item: RoomItem) => void;
   onPreview: (item: Extract<RoomItem, { type: "file" }>) => void;
+  getItemUrl: (downloadUrl: string) => string;
 }) {
   const title = item.type === "file" ? item.fileName : "Text paste";
   const icon = fileIconFor(item);
@@ -1027,7 +1204,7 @@ function ItemCard({
     <li className={isCopied ? "item-card item-card-copied" : "item-card"}>
       {isImage && item.type === "file" ? (
         <button className="item-thumb" onClick={() => onPreview(item)} aria-label={`Preview ${item.fileName}`}>
-          <img src={item.downloadUrl} alt="" loading="lazy" />
+          <img src={getItemUrl(item.downloadUrl)} alt="" loading="lazy" />
         </button>
       ) : (
         <div className={`item-icon item-icon-${icon.tone}`}>

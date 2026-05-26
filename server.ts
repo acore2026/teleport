@@ -275,7 +275,21 @@ function asyncRoute(handler: AsyncHandler): RequestHandler {
 
 const app = express();
 app.disable("x-powered-by");
+app.use("/api", (req, res, next) => {
+  res.setHeader("access-control-allow-origin", "*");
+  res.setHeader("access-control-allow-methods", "GET,POST,DELETE,OPTIONS");
+  res.setHeader("access-control-allow-headers", "content-type");
+  if (req.method === "OPTIONS") {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+});
 app.use(express.json({ limit: maxTextBytes * 3 }));
+
+app.get("/api/health", (req, res) => {
+  res.json({ ok: true, name: "teleport", ttlMs, maxFileBytes });
+});
 
 app.get("/api/rooms/:room/items", (req, res) => {
   const room = normalizeRoom(req.params.room);

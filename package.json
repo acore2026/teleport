@@ -6,9 +6,19 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && tsc -p tsconfig.server.json && vite build",
-    "start": "node --no-warnings dist-server/server.js"
+    "start": "node --no-warnings dist-server/server.js",
+    "desktop:dev": "tauri dev",
+    "desktop:check": "tsc --noEmit && cargo check --manifest-path src-tauri/Cargo.toml",
+    "desktop:build": "tauri build --no-bundle",
+    "desktop:bundle:linux": "tauri build --bundles deb rpm",
+    "desktop:build:macos": "tauri build --target universal-apple-darwin",
+    "desktop:build:windows": "tauri build --target x86_64-pc-windows-msvc"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-global-shortcut": "^2.3.1",
+    "@tauri-apps/plugin-opener": "^2.5.4",
+    "@tauri-apps/plugin-store": "^2.4.3",
     "@vitejs/plugin-react": "^5.1.1",
     "crypto-js": "^4.2.0",
     "express": "^5.2.1",
@@ -19,6 +29,7 @@
     "vite": "^7.3.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.11.2",
     "@types/crypto-js": "^4.2.2",
     "@types/express": "^5.0.6",
     "@types/multer": "^2.1.0",

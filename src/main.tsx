@@ -3,7 +3,14 @@ import { createRoot } from "react-dom/client";
 import CryptoJS from "crypto-js";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
+import { Image } from "@tauri-apps/api/image";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  readImage as readClipboardImage,
+  readText as readClipboardText,
+  writeImage as writeClipboardImage,
+  writeText as writeClipboardText,
+} from "@tauri-apps/plugin-clipboard-manager";
 import { register, unregister } from "@tauri-apps/plugin-global-shortcut";
 import { isPermissionGranted, onAction, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { Store } from "@tauri-apps/plugin-store";
@@ -126,6 +133,8 @@ const serverUrlKey = "teleport-server-url";
 const minifiedModeKey = "teleport-minified-mode";
 const toggleMiniShortcutKey = "teleport-shortcut-toggle-mini";
 const openFullShortcutKey = "teleport-shortcut-open-full";
+const autoCaptureClipboardKey = "teleport-auto-capture-clipboard";
+const autoCopyIncomingKey = "teleport-auto-copy-incoming";
 const defaultDesktopServerUrl = "http://101.245.78.174:7777";
 const defaultShortcuts: DesktopShortcuts = {
   toggleMini: "CommandOrControl+Shift+V",
@@ -161,6 +170,16 @@ function initialMinifiedMode() {
     return stored === null ? true : stored === "true";
   } catch {
     return true;
+  }
+}
+
+function initialBooleanSetting(key: string, fallback: boolean) {
+  if (!isDesktopRuntime()) return fallback;
+  try {
+    const stored = localStorage.getItem(key);
+    return stored === null ? fallback : stored === "true";
+  } catch {
+    return fallback;
   }
 }
 
@@ -484,7 +503,63 @@ function notificationDetailFor(items: RoomItem[], room: string) {
   return "Synced to room";
 }
 
+function clipboardTextSignature(text: string) {
+  return `text:${text.length}:${text}`;
+}
+
+function clipboardImageSignature(width: number, height: number, rgba: Uint8Array) {
+  let sample = 0;
+  const stride = Math.max(1, Math.floor(rgba.length / 128));
+  for (let i = 0; i < rgba.length; i += stride) {
+    sample = (sample * 33 + rgba[i]) >>> 0;
+  }
+  return `image:${width}x${height}:${rgba.length}:${sample}`;
+}
+
+function stampFileName(prefix: string, extension: string) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `${prefix}-${stamp}.${extension}`;
+}
+
+async function imageToPngBlob(image: Image) {
+  const size = await image.size();
+  const rgba = await image.rgba();
+  const canvas = document.createElement("canvas");
+  canvas.width = size.width;
+  canvas.height = size.height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Unable to read clipboard image.");
+  context.putImageData(new ImageData(new Uint8ClampedArray(rgba), size.width, size.height), 0, 0);
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) throw new Error("Unable to read clipboard image.");
+  return { blob, signature: clipboardImageSignature(size.width, size.height, rgba) };
+}
+
+async function blobToPngBytes(blob: Blob) {
+  if (blob.type === "image/png") return new Uint8Array(await blob.arrayBuffer());
+
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Unable to copy image.");
+  context.drawImage(bitmap, 0, 0);
+  const pngBlob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!pngBlob) throw new Error("Unable to copy image.");
+  return new Uint8Array(await pngBlob.arrayBuffer());
+}
+
 async function copyText(text: string) {
+  if (isDesktopRuntime()) {
+    try {
+      await writeClipboardText(text);
+      return;
+    } catch {
+      // Fall through to the browser clipboard path.
+    }
+  }
+
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(text);
     return;
@@ -514,6 +589,14 @@ function App() {
   const initialRoomValue = React.useMemo(initialRoom, []);
   const initialServerValue = React.useMemo(initialServerUrl, []);
   const initialMinifiedValue = React.useMemo(initialMinifiedMode, []);
+  const initialAutoCaptureClipboard = React.useMemo(
+    () => initialBooleanSetting(autoCaptureClipboardKey, false),
+    [],
+  );
+  const initialAutoCopyIncoming = React.useMemo(
+    () => initialBooleanSetting(autoCopyIncomingKey, false),
+    [],
+  );
   const [roomInput, setRoomInput] = React.useState(initialRoomValue);
   const [room, setRoom] = React.useState(initialRoomValue);
   const [serverInput, setServerInput] = React.useState(initialServerValue);
@@ -527,6 +610,8 @@ function App() {
   );
   const [toggleMiniInput, setToggleMiniInput] = React.useState(toggleMiniShortcut);
   const [openFullInput, setOpenFullInput] = React.useState(openFullShortcut);
+  const [autoCaptureClipboard, setAutoCaptureClipboard] = React.useState(initialAutoCaptureClipboard);
+  const [autoCopyIncoming, setAutoCopyIncoming] = React.useState(initialAutoCopyIncoming);
   const [passwordInput, setPasswordInput] = React.useState(() =>
     initialRoomValue && !desktopMode ? passwordForRoom(initialRoomValue) : "",
   );
@@ -547,6 +632,11 @@ function App() {
   const [cacheVersion, setCacheVersion] = React.useState(0);
   const pasteBoxRef = React.useRef<HTMLDivElement | null>(null);
   const desktopStoreRef = React.useRef<Store | null>(null);
+  const miniWindowDragRef = React.useRef(false);
+  const miniWindowDragTimerRef = React.useRef<number | null>(null);
+  const clipboardCaptureBusyRef = React.useRef(false);
+  const lastClipboardCaptureSignatureRef = React.useRef("");
+  const lastClipboardWriteSignatureRef = React.useRef("");
   const feedStateRef = React.useRef<{
     key: string;
     startedAt: number;
@@ -611,6 +701,10 @@ function App() {
         const storedOpenFullShortcut =
           (await store.get<string>(openFullShortcutKey)) ||
           initialShortcut(openFullShortcutKey, defaultShortcuts.openFull);
+        const storedAutoCapture =
+          (await store.get<boolean>(autoCaptureClipboardKey)) ?? initialAutoCaptureClipboard;
+        const storedAutoCopy =
+          (await store.get<boolean>(autoCopyIncomingKey)) ?? initialAutoCopyIncoming;
         const nextRoom = storedRoom ? normalizeRoom(storedRoom) : "";
         const nextPassword = nextRoom ? await keychainGet(nextRoom) : "";
 
@@ -622,6 +716,8 @@ function App() {
         setToggleMiniInput(storedToggleShortcut);
         setOpenFullShortcut(storedOpenFullShortcut);
         setOpenFullInput(storedOpenFullShortcut);
+        setAutoCaptureClipboard(storedAutoCapture);
+        setAutoCopyIncoming(storedAutoCopy);
         if (nextRoom) {
           setRoom(nextRoom);
           setRoomInput(nextRoom);
@@ -640,7 +736,15 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [desktopMode, initialMinifiedValue, initialRoomValue, initialServerValue, isMiniWindow]);
+  }, [
+    desktopMode,
+    initialAutoCaptureClipboard,
+    initialAutoCopyIncoming,
+    initialMinifiedValue,
+    initialRoomValue,
+    initialServerValue,
+    isMiniWindow,
+  ]);
 
   React.useEffect(() => {
     if (!desktopMode) return undefined;
@@ -714,8 +818,8 @@ function App() {
     currentWindow.onFocusChanged(({ payload }) => {
       if (!payload) {
         window.setTimeout(() => {
-          if (!disposed) invoke("hide_mini_panel").catch(() => undefined);
-        }, 120);
+          if (!disposed && !miniWindowDragRef.current) invoke("hide_mini_panel").catch(() => undefined);
+        }, 260);
       }
     }).then((unlisten) => unlisteners.push(unlisten));
     onAction(() => {
@@ -728,9 +832,62 @@ function App() {
 
     return () => {
       disposed = true;
+      if (miniWindowDragTimerRef.current) window.clearTimeout(miniWindowDragTimerRef.current);
       for (const unlisten of unlisteners) unlisten();
     };
   }, [desktopMode, isMiniWindow]);
+
+  React.useEffect(() => {
+    if (!desktopMode || !isMiniWindow || !autoCaptureClipboard || !room) return undefined;
+
+    let disposed = false;
+    const captureClipboard = async () => {
+      if (disposed || clipboardCaptureBusyRef.current) return;
+      clipboardCaptureBusyRef.current = true;
+      try {
+        const text = await readClipboardText().catch(() => "");
+        if (text.trim()) {
+          const signature = clipboardTextSignature(text);
+          if (
+            signature !== lastClipboardCaptureSignatureRef.current &&
+            signature !== lastClipboardWriteSignatureRef.current
+          ) {
+            lastClipboardCaptureSignatureRef.current = signature;
+            await uploadText(text);
+          }
+          return;
+        }
+
+        const image = await readClipboardImage().catch(() => null);
+        if (!image) return;
+        const { blob, signature } = await imageToPngBlob(image);
+        if (
+          signature === lastClipboardCaptureSignatureRef.current ||
+          signature === lastClipboardWriteSignatureRef.current
+        ) {
+          return;
+        }
+        lastClipboardCaptureSignatureRef.current = signature;
+        await uploadFiles([
+          new File([blob], stampFileName("clipboard-image", "png"), {
+            type: "image/png",
+            lastModified: Date.now(),
+          }),
+        ]);
+      } finally {
+        clipboardCaptureBusyRef.current = false;
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      captureClipboard().catch(() => undefined);
+    }, 1600);
+    captureClipboard().catch(() => undefined);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [autoCaptureClipboard, desktopMode, isMiniWindow, room, roomPassword, serverUrl]);
 
   React.useEffect(() => {
     const timer = setInterval(() => setItems((current) => [...current]), 30000);
@@ -842,7 +999,41 @@ function App() {
 
     if (shouldNotify && newItems.length) {
       notifyNewItems(newItems, nextRoom);
+      copyIncomingItems(newItems, nextRoom).catch(() => undefined);
     }
+  }
+
+  async function copyIncomingItems(newItems: RoomItem[], nextRoom: string) {
+    if (!desktopMode || !isMiniWindow || !autoCopyIncoming) return;
+    const item = newItems.find(
+      (candidate) => candidate.type === "text" || (candidate.type === "file" && candidate.mimeType.startsWith("image/")),
+    );
+    if (!item) return;
+
+    if (item.type === "text") {
+      let text = item.textContent;
+      if (item.encrypted && item.cryptoMeta) {
+        text = readCachedText(nextRoom, item) || "";
+        if (!text && roomPassword) {
+          text = openText(item.cryptoMeta, item.textContent, nextRoom, roomPassword);
+          rememberText(nextRoom, item, text);
+          setCacheVersion((value) => value + 1);
+        }
+      }
+      if (!text) return;
+      lastClipboardWriteSignatureRef.current = clipboardTextSignature(text);
+      await writeClipboardText(text);
+      return;
+    }
+
+    const response = await fetch(absoluteItemUrl(item.downloadUrl, serverUrl));
+    if (!response.ok) return;
+    const bytes = await blobToPngBytes(await response.blob());
+    const image = await Image.fromBytes(bytes);
+    const size = await image.size();
+    const rgba = await image.rgba();
+    lastClipboardWriteSignatureRef.current = clipboardImageSignature(size.width, size.height, rgba);
+    await writeClipboardImage(image);
   }
 
   function notifyNewItems(newItems: RoomItem[], nextRoom: string) {
@@ -947,12 +1138,16 @@ function App() {
       localStorage.setItem(minifiedModeKey, String(minifiedMode));
       localStorage.setItem(toggleMiniShortcutKey, nextToggleShortcut);
       localStorage.setItem(openFullShortcutKey, nextOpenFullShortcut);
+      localStorage.setItem(autoCaptureClipboardKey, String(autoCaptureClipboard));
+      localStorage.setItem(autoCopyIncomingKey, String(autoCopyIncoming));
 
       if (desktopStoreRef.current) {
         await desktopStoreRef.current.set(serverUrlKey, nextServerUrl);
         await desktopStoreRef.current.set(minifiedModeKey, minifiedMode);
         await desktopStoreRef.current.set(toggleMiniShortcutKey, nextToggleShortcut);
         await desktopStoreRef.current.set(openFullShortcutKey, nextOpenFullShortcut);
+        await desktopStoreRef.current.set(autoCaptureClipboardKey, autoCaptureClipboard);
+        await desktopStoreRef.current.set(autoCopyIncomingKey, autoCopyIncoming);
       }
 
       publishDesktopState({ room, serverUrl: nextServerUrl, roomPassword });
@@ -1158,7 +1353,17 @@ function App() {
     if (!desktopMode || !isMiniWindow || event.button !== 0) return;
     const target = event.target as HTMLElement;
     if (target.closest("button, input, textarea, select, a")) return;
-    getCurrentWindow().startDragging().catch(() => undefined);
+    miniWindowDragRef.current = true;
+    if (miniWindowDragTimerRef.current) window.clearTimeout(miniWindowDragTimerRef.current);
+    getCurrentWindow()
+      .startDragging()
+      .catch(() => undefined)
+      .finally(() => {
+        miniWindowDragTimerRef.current = window.setTimeout(() => {
+          miniWindowDragRef.current = false;
+          getCurrentWindow().setFocus().catch(() => undefined);
+        }, 350);
+      });
   }
 
   if (isMiniWindow) {
@@ -1217,6 +1422,28 @@ function App() {
                     type="checkbox"
                     checked={minifiedMode}
                     onChange={(event) => setMinifiedMode(event.currentTarget.checked)}
+                  />
+                </label>
+                <label className="mini-toggle">
+                  <span>
+                    <strong>Capture clipboard</strong>
+                    <small>Auto paste copied text and images</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={autoCaptureClipboard}
+                    onChange={(event) => setAutoCaptureClipboard(event.currentTarget.checked)}
+                  />
+                </label>
+                <label className="mini-toggle">
+                  <span>
+                    <strong>Copy new items</strong>
+                    <small>Auto copy incoming text and images</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={autoCopyIncoming}
+                    onChange={(event) => setAutoCopyIncoming(event.currentTarget.checked)}
                   />
                 </label>
                 <label>

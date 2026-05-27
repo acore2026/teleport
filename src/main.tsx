@@ -8,6 +8,7 @@ import { register, unregister } from "@tauri-apps/plugin-global-shortcut";
 import { isPermissionGranted, onAction, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { Store } from "@tauri-apps/plugin-store";
 import {
+  ArrowLeft,
   ChevronDown,
   Check,
   Clipboard,
@@ -1153,10 +1154,17 @@ function App() {
     window.open(absoluteItemUrl(item.downloadUrl, serverUrl), "_blank", "noopener,noreferrer");
   }
 
+  function startMiniWindowDrag(event: React.MouseEvent<HTMLElement>) {
+    if (!desktopMode || !isMiniWindow || event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("button, input, textarea, select, a")) return;
+    getCurrentWindow().startDragging().catch(() => undefined);
+  }
+
   if (isMiniWindow) {
     return (
       <main className="mini-shell">
-        <header className="mini-titlebar">
+        <header className="mini-titlebar" onMouseDown={startMiniWindowDrag}>
           <div className="mini-brand">
             <span aria-hidden="true">
               <Zap size={16} fill="currentColor" />
@@ -1164,15 +1172,19 @@ function App() {
             <strong>teleport</strong>
           </div>
           <div className="mini-actions">
-            {room && <button className="mini-room-chip" onClick={() => setIsEditingRoom(true)}>{room}</button>}
-            <button
-              className="mini-icon-button"
-              onClick={() => setIsMiniSettingsOpen((value) => !value)}
-              aria-label="Settings"
-              title="Settings"
-            >
-              <Settings size={16} />
-            </button>
+            {!isMiniSettingsOpen && room && (
+              <button className="mini-room-chip" onClick={() => setIsEditingRoom(true)}>{room}</button>
+            )}
+            {!isMiniSettingsOpen && (
+              <button
+                className="mini-icon-button"
+                onClick={() => setIsMiniSettingsOpen(true)}
+                aria-label="Settings"
+                title="Settings"
+              >
+                <Settings size={16} />
+              </button>
+            )}
             <button
               className="mini-icon-button"
               onClick={openFullWindow}
@@ -1184,42 +1196,51 @@ function App() {
           </div>
         </header>
 
-        {isMiniSettingsOpen && (
-          <section className="mini-settings" aria-label="Client settings">
-            <label className="mini-toggle">
-              <span>
-                <strong>Minified mode</strong>
-                <small>Open this panel on launch</small>
-              </span>
-              <input
-                type="checkbox"
-                checked={minifiedMode}
-                onChange={(event) => setMinifiedMode(event.currentTarget.checked)}
-              />
-            </label>
-            <label>
-              <span>Server address</span>
-              <input value={serverInput} onChange={(event) => setServerInput(event.target.value)} />
-            </label>
-            <label>
-              <span>Toggle panel</span>
-              <input value={toggleMiniInput} onChange={(event) => setToggleMiniInput(event.target.value)} />
-            </label>
-            <label>
-              <span>Full window</span>
-              <input value={openFullInput} onChange={(event) => setOpenFullInput(event.target.value)} />
-            </label>
-            <div className="mini-settings-foot">
-              {settingsMessage && <p>{settingsMessage}</p>}
-              <button type="button" onClick={applyDesktopSettings}>
-                Save
-              </button>
-            </div>
-          </section>
-        )}
-
         <section className="mini-content">
-          {!room || isEditingRoom ? (
+          {isMiniSettingsOpen ? (
+            <section className="mini-settings-page" aria-label="Client settings">
+              <div className="mini-page-head">
+                <button className="mini-back-button" type="button" onClick={() => setIsMiniSettingsOpen(false)}>
+                  <ArrowLeft size={15} />
+                  Back
+                </button>
+                <h2>Settings</h2>
+              </div>
+
+              <div className="mini-settings-form">
+                <label className="mini-toggle">
+                  <span>
+                    <strong>Minified mode</strong>
+                    <small>Open this panel on launch</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={minifiedMode}
+                    onChange={(event) => setMinifiedMode(event.currentTarget.checked)}
+                  />
+                </label>
+                <label>
+                  <span>Server address</span>
+                  <input value={serverInput} onChange={(event) => setServerInput(event.target.value)} />
+                </label>
+                <label>
+                  <span>Toggle panel</span>
+                  <input value={toggleMiniInput} onChange={(event) => setToggleMiniInput(event.target.value)} />
+                </label>
+                <label>
+                  <span>Full window</span>
+                  <input value={openFullInput} onChange={(event) => setOpenFullInput(event.target.value)} />
+                </label>
+              </div>
+
+              <div className="mini-settings-foot">
+                {settingsMessage && <p>{settingsMessage}</p>}
+                <button type="button" onClick={applyDesktopSettings}>
+                  Save
+                </button>
+              </div>
+            </section>
+          ) : !room || isEditingRoom ? (
             <section className="mini-room-card">
               <h2>{room ? "Switch room" : "Create or join a room"}</h2>
               <RoomPrompt

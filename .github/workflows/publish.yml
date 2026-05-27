@@ -127,6 +127,7 @@ jobs:
       - name: Download client artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: teleport-*
           path: release-artifacts
           merge-multiple: true
 

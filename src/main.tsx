@@ -105,8 +105,9 @@ type NewItemNotice = {
 };
 
 type DesktopShortcuts = {
-  toggleMini: string;
-  openFull: string;
+  openPanel: string;
+  copy: string;
+  paste: string;
 };
 
 type DesktopStateSync = {
@@ -131,18 +132,15 @@ const recentRoomsKey = "teleport-recent-rooms";
 const roomPasswordsKey = "teleport-room-passwords";
 const serverUrlKey = "teleport-server-url";
 const minifiedModeKey = "teleport-minified-mode";
-const toggleMiniShortcutKey = "teleport-shortcut-toggle-mini";
-const openFullShortcutKey = "teleport-shortcut-open-full";
+const openPanelShortcutKey = "teleport-shortcut-toggle-mini";
+const copyShortcutKey = "teleport-shortcut-copy";
+const pasteShortcutKey = "teleport-shortcut-paste";
 const autoCaptureClipboardKey = "teleport-auto-capture-clipboard";
 const autoCopyIncomingKey = "teleport-auto-copy-incoming";
 const clipboardLeaseKey = "teleport-clipboard-capture-lease";
 const clipboardWriteSignatureKey = "teleport-clipboard-write-signature";
 const notificationLeaseKey = "teleport-notification-lease";
 const defaultDesktopServerUrl = "http://101.245.78.174:7777";
-const defaultShortcuts: DesktopShortcuts = {
-  toggleMini: "CommandOrControl+Shift+V",
-  openFull: "CommandOrControl+Shift+O",
-};
 const textCacheKeyPrefix = "teleport-text-cache";
 const maxFileBytes = 200 * 1024 * 1024;
 const cryptoIterations = 1000;
@@ -174,6 +172,22 @@ function initialMinifiedMode() {
   } catch {
     return true;
   }
+}
+
+function platformShortcutModifier() {
+  if (typeof navigator === "undefined") return "Control";
+  const platform = navigator.platform || "";
+  const userAgent = navigator.userAgent || "";
+  return /Mac|iPhone|iPad|iPod/i.test(platform) || /Mac OS|macOS/i.test(userAgent) ? "Command" : "Control";
+}
+
+function desktopShortcutDefaults(): DesktopShortcuts {
+  const modifier = platformShortcutModifier();
+  return {
+    openPanel: `${modifier}+Shift+P`,
+    copy: `${modifier}+Shift+C`,
+    paste: `${modifier}+Shift+V`,
+  };
 }
 
 function initialBooleanSetting(key: string, fallback: boolean) {
@@ -208,7 +222,7 @@ function normalizeShortcut(value: string, fallback: string) {
   const shortcut = value.trim();
   if (!shortcut) return fallback;
   if (!shortcut.includes("+")) {
-    throw new Error("Shortcut must include at least one modifier, for example CommandOrControl+Shift+V.");
+    throw new Error(`Shortcut must include at least one modifier, for example ${fallback}.`);
   }
   return shortcut;
 }
@@ -629,6 +643,7 @@ async function copyText(text: string) {
   if (isDesktopRuntime()) {
     try {
       await writeClipboardText(text);
+      rememberClipboardWriteSignature(clipboardTextSignature(text));
       return;
     } catch {
       // Fall through to the browser clipboard path.
@@ -637,6 +652,7 @@ async function copyText(text: string) {
 
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(text);
+    rememberClipboardWriteSignature(clipboardTextSignature(text));
     return;
   }
 
@@ -648,6 +664,7 @@ async function copyText(text: string) {
   shim.select();
   document.execCommand("copy");
   shim.remove();
+  rememberClipboardWriteSignature(clipboardTextSignature(text));
 }
 
 function App() {
@@ -664,6 +681,7 @@ function App() {
   const initialRoomValue = React.useMemo(initialRoom, []);
   const initialServerValue = React.useMemo(initialServerUrl, []);
   const initialMinifiedValue = React.useMemo(initialMinifiedMode, []);
+  const shortcutDefaults = React.useMemo(desktopShortcutDefaults, []);
   const initialAutoCaptureClipboard = React.useMemo(
     () => initialBooleanSetting(autoCaptureClipboardKey, false),
     [],
@@ -677,14 +695,18 @@ function App() {
   const [serverInput, setServerInput] = React.useState(initialServerValue);
   const [serverUrl, setServerUrl] = React.useState(initialServerValue);
   const [minifiedMode, setMinifiedMode] = React.useState(initialMinifiedValue);
-  const [toggleMiniShortcut, setToggleMiniShortcut] = React.useState(() =>
-    initialShortcut(toggleMiniShortcutKey, defaultShortcuts.toggleMini),
+  const [openPanelShortcut, setOpenPanelShortcut] = React.useState(() =>
+    initialShortcut(openPanelShortcutKey, shortcutDefaults.openPanel),
   );
-  const [openFullShortcut, setOpenFullShortcut] = React.useState(() =>
-    initialShortcut(openFullShortcutKey, defaultShortcuts.openFull),
+  const [copyShortcut, setCopyShortcut] = React.useState(() =>
+    initialShortcut(copyShortcutKey, shortcutDefaults.copy),
   );
-  const [toggleMiniInput, setToggleMiniInput] = React.useState(toggleMiniShortcut);
-  const [openFullInput, setOpenFullInput] = React.useState(openFullShortcut);
+  const [pasteShortcut, setPasteShortcut] = React.useState(() =>
+    initialShortcut(pasteShortcutKey, shortcutDefaults.paste),
+  );
+  const [openPanelInput, setOpenPanelInput] = React.useState(openPanelShortcut);
+  const [copyInput, setCopyInput] = React.useState(copyShortcut);
+  const [pasteInput, setPasteInput] = React.useState(pasteShortcut);
   const [autoCaptureClipboard, setAutoCaptureClipboard] = React.useState(initialAutoCaptureClipboard);
   const [autoCopyIncoming, setAutoCopyIncoming] = React.useState(initialAutoCopyIncoming);
   const [passwordInput, setPasswordInput] = React.useState(() =>
@@ -773,12 +795,13 @@ function App() {
         const storedServerUrl = normalizeServerUrl((await store.get<string>(serverUrlKey)) || initialServerValue);
         const storedRoom = (await store.get<string>(roomKey)) || initialRoomValue;
         const storedMinified = (await store.get<boolean>(minifiedModeKey)) ?? initialMinifiedValue;
-        const storedToggleShortcut =
-          (await store.get<string>(toggleMiniShortcutKey)) ||
-          initialShortcut(toggleMiniShortcutKey, defaultShortcuts.toggleMini);
-        const storedOpenFullShortcut =
-          (await store.get<string>(openFullShortcutKey)) ||
-          initialShortcut(openFullShortcutKey, defaultShortcuts.openFull);
+        const storedOpenPanelShortcut =
+          (await store.get<string>(openPanelShortcutKey)) ||
+          initialShortcut(openPanelShortcutKey, shortcutDefaults.openPanel);
+        const storedCopyShortcut =
+          (await store.get<string>(copyShortcutKey)) || initialShortcut(copyShortcutKey, shortcutDefaults.copy);
+        const storedPasteShortcut =
+          (await store.get<string>(pasteShortcutKey)) || initialShortcut(pasteShortcutKey, shortcutDefaults.paste);
         const storedAutoCapture =
           (await store.get<boolean>(autoCaptureClipboardKey)) ?? initialAutoCaptureClipboard;
         const storedAutoCopy =
@@ -790,10 +813,12 @@ function App() {
         setServerUrl(storedServerUrl || defaultDesktopServerUrl);
         setServerInput(storedServerUrl || defaultDesktopServerUrl);
         setMinifiedMode(storedMinified);
-        setToggleMiniShortcut(storedToggleShortcut);
-        setToggleMiniInput(storedToggleShortcut);
-        setOpenFullShortcut(storedOpenFullShortcut);
-        setOpenFullInput(storedOpenFullShortcut);
+        setOpenPanelShortcut(storedOpenPanelShortcut);
+        setOpenPanelInput(storedOpenPanelShortcut);
+        setCopyShortcut(storedCopyShortcut);
+        setCopyInput(storedCopyShortcut);
+        setPasteShortcut(storedPasteShortcut);
+        setPasteInput(storedPasteShortcut);
         setAutoCaptureClipboard(storedAutoCapture);
         setAutoCopyIncoming(storedAutoCopy);
         if (nextRoom) {
@@ -822,6 +847,7 @@ function App() {
     initialRoomValue,
     initialServerValue,
     isMiniWindow,
+    shortcutDefaults,
   ]);
 
   React.useEffect(() => {
@@ -864,16 +890,24 @@ function App() {
     if (!desktopMode || !isMiniWindow) return undefined;
 
     let mounted = true;
-    const shortcuts = [toggleMiniShortcut, openFullShortcut].filter(
+    const shortcuts = [openPanelShortcut, copyShortcut, pasteShortcut].filter(
       (shortcut, index, values) => shortcut && values.indexOf(shortcut) === index,
     );
     register(shortcuts, async (event) => {
       if (event.state !== "Pressed") return;
-      if (event.shortcut === openFullShortcut) {
-        await openFullWindow();
+      if (event.shortcut === copyShortcut) {
+        await copyNewestItem();
         return;
       }
-      await invoke("toggle_mini_panel").catch(() => undefined);
+      if (event.shortcut === pasteShortcut) {
+        await invoke("show_mini_panel").catch(() => undefined);
+        await pasteClipboardNow({ useLease: false });
+        window.setTimeout(() => {
+          if (mounted) pasteBoxRef.current?.focus();
+        }, 80);
+        return;
+      }
+      await invoke("show_mini_panel").catch(() => undefined);
       window.setTimeout(() => {
         if (mounted) pasteBoxRef.current?.focus();
       }, 80);
@@ -885,7 +919,7 @@ function App() {
       mounted = false;
       if (shortcuts.length) unregister(shortcuts).catch(() => undefined);
     };
-  }, [desktopMode, isMiniWindow, openFullShortcut, openFullWindow, toggleMiniShortcut]);
+  }, [copyShortcut, desktopMode, isMiniWindow, openPanelShortcut, pasteShortcut, visibleItems]);
 
   React.useEffect(() => {
     if (!desktopMode || !isMiniWindow) return undefined;
@@ -918,43 +952,7 @@ function App() {
 
     let disposed = false;
     const captureClipboard = async () => {
-      if (disposed || clipboardCaptureBusyRef.current) return;
-      clipboardCaptureBusyRef.current = true;
-      try {
-        if (!tryClaimClipboardCaptureLease(clipboardOwnerRef.current)) return;
-
-        const text = await readClipboardText().catch(() => "");
-        if (text.trim()) {
-          const signature = clipboardTextSignature(text);
-          if (
-            signature !== lastClipboardCaptureSignatureRef.current &&
-            !wasClipboardWrittenByTeleport(signature, lastClipboardWriteSignatureRef.current)
-          ) {
-            lastClipboardCaptureSignatureRef.current = signature;
-            await uploadText(text);
-          }
-          return;
-        }
-
-        const image = await readClipboardImage().catch(() => null);
-        if (!image) return;
-        const { blob, signature } = await imageToPngBlob(image);
-        if (
-          signature === lastClipboardCaptureSignatureRef.current ||
-          wasClipboardWrittenByTeleport(signature, lastClipboardWriteSignatureRef.current)
-        ) {
-          return;
-        }
-        lastClipboardCaptureSignatureRef.current = signature;
-        await uploadFiles([
-          new File([blob], stampFileName("clipboard-image", "png"), {
-            type: "image/png",
-            lastModified: Date.now(),
-          }),
-        ]);
-      } finally {
-        clipboardCaptureBusyRef.current = false;
-      }
+      if (!disposed) await pasteClipboardNow();
     };
 
     const timer = window.setInterval(() => {
@@ -1200,34 +1198,90 @@ function App() {
     await enterRoom(nextRoom, nextPassword);
   }
 
+  async function pasteClipboardNow(options: { useLease?: boolean } = {}) {
+    if (!room) {
+      setError("Create or join a room first.");
+      setIsEditingRoom(true);
+      return;
+    }
+    if (clipboardCaptureBusyRef.current) return;
+
+    clipboardCaptureBusyRef.current = true;
+    try {
+      if (options.useLease !== false && !tryClaimClipboardCaptureLease(clipboardOwnerRef.current)) return;
+
+      const text = await readClipboardText().catch(() => "");
+      if (text.trim()) {
+        const signature = clipboardTextSignature(text);
+        if (
+          signature !== lastClipboardCaptureSignatureRef.current &&
+          !wasClipboardWrittenByTeleport(signature, lastClipboardWriteSignatureRef.current)
+        ) {
+          lastClipboardCaptureSignatureRef.current = signature;
+          await uploadText(text);
+        }
+        return;
+      }
+
+      const image = await readClipboardImage().catch(() => null);
+      if (!image) return;
+      const { blob, signature } = await imageToPngBlob(image);
+      if (
+        signature === lastClipboardCaptureSignatureRef.current ||
+        wasClipboardWrittenByTeleport(signature, lastClipboardWriteSignatureRef.current)
+      ) {
+        return;
+      }
+      lastClipboardCaptureSignatureRef.current = signature;
+      await uploadFiles([
+        new File([blob], stampFileName("clipboard-image", "png"), {
+          type: "image/png",
+          lastModified: Date.now(),
+        }),
+      ]);
+    } finally {
+      clipboardCaptureBusyRef.current = false;
+    }
+  }
+
+  async function copyNewestItem() {
+    const newestItem = visibleItems.find((item) => item.type === "file" || item.textContent);
+    if (newestItem) await copyItem(newestItem);
+  }
+
   async function applyDesktopSettings() {
     try {
       const nextServerUrl = normalizeServerUrl(serverInput) || defaultDesktopServerUrl;
-      const nextToggleShortcut = normalizeShortcut(toggleMiniInput, defaultShortcuts.toggleMini);
-      const nextOpenFullShortcut = normalizeShortcut(openFullInput, defaultShortcuts.openFull);
-      if (nextToggleShortcut === nextOpenFullShortcut) {
+      const nextOpenPanelShortcut = normalizeShortcut(openPanelInput, shortcutDefaults.openPanel);
+      const nextCopyShortcut = normalizeShortcut(copyInput, shortcutDefaults.copy);
+      const nextPasteShortcut = normalizeShortcut(pasteInput, shortcutDefaults.paste);
+      if (new Set([nextOpenPanelShortcut, nextCopyShortcut, nextPasteShortcut]).size !== 3) {
         throw new Error("Shortcuts must be different.");
       }
 
       setServerUrl(nextServerUrl);
       setServerInput(nextServerUrl);
-      setToggleMiniShortcut(nextToggleShortcut);
-      setToggleMiniInput(nextToggleShortcut);
-      setOpenFullShortcut(nextOpenFullShortcut);
-      setOpenFullInput(nextOpenFullShortcut);
+      setOpenPanelShortcut(nextOpenPanelShortcut);
+      setOpenPanelInput(nextOpenPanelShortcut);
+      setCopyShortcut(nextCopyShortcut);
+      setCopyInput(nextCopyShortcut);
+      setPasteShortcut(nextPasteShortcut);
+      setPasteInput(nextPasteShortcut);
       setSettingsMessage("Saved");
       localStorage.setItem(serverUrlKey, nextServerUrl);
       localStorage.setItem(minifiedModeKey, String(minifiedMode));
-      localStorage.setItem(toggleMiniShortcutKey, nextToggleShortcut);
-      localStorage.setItem(openFullShortcutKey, nextOpenFullShortcut);
+      localStorage.setItem(openPanelShortcutKey, nextOpenPanelShortcut);
+      localStorage.setItem(copyShortcutKey, nextCopyShortcut);
+      localStorage.setItem(pasteShortcutKey, nextPasteShortcut);
       localStorage.setItem(autoCaptureClipboardKey, String(autoCaptureClipboard));
       localStorage.setItem(autoCopyIncomingKey, String(autoCopyIncoming));
 
       if (desktopStoreRef.current) {
         await desktopStoreRef.current.set(serverUrlKey, nextServerUrl);
         await desktopStoreRef.current.set(minifiedModeKey, minifiedMode);
-        await desktopStoreRef.current.set(toggleMiniShortcutKey, nextToggleShortcut);
-        await desktopStoreRef.current.set(openFullShortcutKey, nextOpenFullShortcut);
+        await desktopStoreRef.current.set(openPanelShortcutKey, nextOpenPanelShortcut);
+        await desktopStoreRef.current.set(copyShortcutKey, nextCopyShortcut);
+        await desktopStoreRef.current.set(pasteShortcutKey, nextPasteShortcut);
         await desktopStoreRef.current.set(autoCaptureClipboardKey, autoCaptureClipboard);
         await desktopStoreRef.current.set(autoCopyIncomingKey, autoCopyIncoming);
       }
@@ -1424,6 +1478,9 @@ function App() {
     window.setTimeout(() => {
       setCopiedItemId((current) => (current === item.id ? "" : current));
     }, 1300);
+    if (desktopMode && isMiniWindow) {
+      invoke("hide_mini_panel").catch(() => undefined);
+    }
   }
 
   async function downloadItem(item: RoomItem) {
@@ -1508,7 +1565,7 @@ function App() {
                 </label>
                 <label className="mini-toggle">
                   <span>
-                    <strong>Capture clipboard</strong>
+                    <strong>Auto Paste</strong>
                     <small>Auto paste copied text and images</small>
                   </span>
                   <input
@@ -1519,7 +1576,7 @@ function App() {
                 </label>
                 <label className="mini-toggle">
                   <span>
-                    <strong>Copy new items</strong>
+                    <strong>Auto Copy</strong>
                     <small>Auto copy incoming text and images</small>
                   </span>
                   <input
@@ -1533,12 +1590,16 @@ function App() {
                   <input value={serverInput} onChange={(event) => setServerInput(event.target.value)} />
                 </label>
                 <label>
-                  <span>Toggle panel</span>
-                  <input value={toggleMiniInput} onChange={(event) => setToggleMiniInput(event.target.value)} />
+                  <span>Open panel</span>
+                  <input value={openPanelInput} onChange={(event) => setOpenPanelInput(event.target.value)} />
                 </label>
                 <label>
-                  <span>Full window</span>
-                  <input value={openFullInput} onChange={(event) => setOpenFullInput(event.target.value)} />
+                  <span>Copy</span>
+                  <input value={copyInput} onChange={(event) => setCopyInput(event.target.value)} />
+                </label>
+                <label>
+                  <span>Paste</span>
+                  <input value={pasteInput} onChange={(event) => setPasteInput(event.target.value)} />
                 </label>
               </div>
 

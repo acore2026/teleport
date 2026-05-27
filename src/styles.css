@@ -15,6 +15,10 @@
     sans-serif;
 }
 
+* {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
   min-width: 320px;
@@ -41,6 +45,7 @@ button {
 
 .title-inner {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
@@ -469,11 +474,11 @@ button {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(19rem, 0.78fr) minmax(26rem, 1.22fr);
-  gap: 1.15rem;
+  grid-template-columns: minmax(18rem, 0.82fr) minmax(24rem, 1.18fr);
+  gap: clamp(0.75rem, 1.5vw, 1.15rem);
   width: min(1260px, calc(100% - 2rem));
   margin: 0 auto;
-  padding: 1.4rem 0;
+  padding: clamp(0.75rem, 2vw, 1.4rem) 0;
 }
 
 .drop-column {
@@ -507,7 +512,7 @@ button {
 .paste-box {
   position: relative;
   display: grid;
-  min-height: 24rem;
+  min-height: clamp(15rem, 42vh, 24rem);
   place-items: center;
   align-content: center;
   gap: 0.9rem;
@@ -726,7 +731,6 @@ button {
   padding: 0.72rem 0.82rem;
   color: #0f172a;
   box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12);
-  animation: notice-in 180ms ease;
 }
 
 .new-item-notice > span {
@@ -761,7 +765,9 @@ button {
 }
 
 .items-panel {
-  min-height: 38rem;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: clamp(24rem, calc(100dvh - 6.5rem), 42rem);
   overflow: hidden;
 }
 
@@ -784,8 +790,10 @@ button {
 
 .items-list {
   display: grid;
+  align-content: start;
   gap: 0.55rem;
   margin: 0;
+  overflow: auto;
   padding: 0.75rem;
   list-style: none;
 }
@@ -1196,6 +1204,8 @@ button {
 }
 
 .mini-shell {
+  width: 100vw;
+  min-width: 0;
   min-height: 100dvh;
   overflow: hidden;
   background:
@@ -1206,7 +1216,7 @@ button {
 
 .mini-titlebar {
   display: flex;
-  min-height: 3rem;
+  min-height: clamp(2.55rem, 9dvh, 3rem);
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
@@ -1214,7 +1224,7 @@ button {
   background: rgba(255, 255, 255, 0.88);
   cursor: grab;
   user-select: none;
-  padding: 0 0.8rem;
+  padding: 0 clamp(0.55rem, 2.2vw, 0.8rem);
   backdrop-filter: blur(16px);
 }
 
@@ -1265,7 +1275,7 @@ button {
 }
 
 .mini-room-chip {
-  max-width: 7rem;
+  max-width: min(7rem, 32vw);
   overflow: hidden;
   padding: 0 0.65rem;
   color: #6d28d9;
@@ -1289,10 +1299,11 @@ button {
 
 .mini-content {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 0.75rem;
-  height: calc(100dvh - 3rem);
+  height: calc(100dvh - clamp(2.55rem, 9dvh, 3rem));
   overflow: auto;
-  padding: 0.75rem;
+  padding: clamp(0.5rem, 2vw, 0.75rem);
 }
 
 .mini-settings,
@@ -1316,6 +1327,7 @@ button {
 .mini-settings-page {
   align-content: start;
   min-height: 100%;
+  overflow: auto;
 }
 
 .mini-page-head {
@@ -1339,7 +1351,7 @@ button {
 
 .mini-settings-form {
   display: grid;
-  gap: 0.65rem;
+  gap: clamp(0.42rem, 1.4dvh, 0.65rem);
 }
 
 .mini-settings label,
@@ -1424,8 +1436,8 @@ button {
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 0.75rem;
-  min-height: 5.5rem;
-  padding: 0.9rem;
+  min-height: clamp(4.25rem, 16dvh, 5.5rem);
+  padding: clamp(0.62rem, 2dvh, 0.9rem);
   outline: 0;
   transition:
     border-color 160ms ease,
@@ -1440,7 +1452,7 @@ button {
 }
 
 .mini-paste-box-dragging {
-  transform: scale(0.99);
+  transform: none;
 }
 
 .mini-paste-box > span {
@@ -1471,6 +1483,8 @@ button {
 .mini-list-panel {
   min-height: 0;
   overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .mini-list-head {
@@ -1488,8 +1502,10 @@ button {
 
 .mini-items-list {
   display: grid;
+  align-content: start;
   gap: 0.45rem;
-  max-height: clamp(10rem, calc(100dvh - 15rem), 24rem);
+  max-height: none;
+  min-height: 0;
   margin: 0;
   overflow: auto;
   padding: 0.55rem;
@@ -1521,13 +1537,38 @@ button {
   }
 
   .mini-items-list {
-    max-height: clamp(8rem, calc(100dvh - 13rem), 20rem);
     padding: 0.45rem;
   }
 
   .mini-item {
     gap: 0.35rem;
     padding: 0.35rem;
+  }
+}
+
+@media (max-height: 430px) {
+  .mini-brand strong,
+  .mini-room-chip {
+    display: none;
+  }
+
+  .mini-content {
+    gap: 0.42rem;
+    padding: 0.42rem;
+  }
+
+  .mini-paste-box {
+    min-height: 3.6rem;
+    gap: 0.5rem;
+  }
+
+  .mini-paste-box p,
+  .mini-item-copy small {
+    display: none;
+  }
+
+  .mini-empty {
+    min-height: 5.5rem;
   }
 }
 
@@ -1704,6 +1745,21 @@ button {
   100% {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@media (max-width: 1040px) {
+  .workspace {
+    grid-template-columns: minmax(17rem, 0.9fr) minmax(21rem, 1.1fr);
+  }
+
+  .item-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .item-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
   }
 }
 

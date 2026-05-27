@@ -1,6 +1,6 @@
 [package]
 name = "teleport-desktop"
-version = "1.1.0"
+version = "1.2.0"
 description = "Desktop client for teleport"
 authors = ["teleport contributors"]
 edition = "2021"

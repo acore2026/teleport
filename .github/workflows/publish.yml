@@ -70,6 +70,18 @@ jobs:
             command: npm run desktop:standalone:windows
             artifacts: |
               release-artifacts/*.zip
+          - name: macos-x64
+            os: macos-13
+            command: npm run desktop:standalone:macos:x64
+            rust_target: x86_64-apple-darwin
+            artifacts: |
+              release-artifacts/*.tar.gz
+          - name: macos-arm64
+            os: macos-14
+            command: npm run desktop:standalone:macos:arm64
+            rust_target: aarch64-apple-darwin
+            artifacts: |
+              release-artifacts/*.tar.gz
 
     steps:
       - name: Checkout
@@ -83,6 +95,10 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install macOS Rust target
+        if: startsWith(matrix.name, 'macos-')
+        run: rustup target add ${{ matrix.rust_target }}
 
       - name: Install Linux desktop dependencies
         if: matrix.name == 'linux'
@@ -121,6 +137,24 @@ jobs:
           Copy-Item src-tauri/target/x86_64-pc-windows-msvc/release/teleport-desktop.exe release-artifacts/teleport.exe
           Compress-Archive -Path release-artifacts/teleport.exe -DestinationPath release-artifacts/teleport-windows-x64-standalone.zip -Force
           Remove-Item release-artifacts/teleport.exe
+
+      - name: Package macOS x64 standalone
+        if: matrix.name == 'macos-x64'
+        run: |
+          mkdir -p release-artifacts
+          cp src-tauri/target/x86_64-apple-darwin/release/teleport-desktop release-artifacts/teleport
+          chmod +x release-artifacts/teleport
+          tar -C release-artifacts -czf release-artifacts/teleport-macos-x64-standalone.tar.gz teleport
+          rm release-artifacts/teleport
+
+      - name: Package macOS arm64 standalone
+        if: matrix.name == 'macos-arm64'
+        run: |
+          mkdir -p release-artifacts
+          cp src-tauri/target/aarch64-apple-darwin/release/teleport-desktop release-artifacts/teleport
+          chmod +x release-artifacts/teleport
+          tar -C release-artifacts -czf release-artifacts/teleport-macos-arm64-standalone.tar.gz teleport
+          rm release-artifacts/teleport
 
       - name: Upload client artifact
         uses: actions/upload-artifact@v4

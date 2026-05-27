@@ -15,7 +15,7 @@
 - 24-hour auto-destroy for every item.
 - Lightweight room model: no account system, no device list, no generated share flow.
 - Client-side text encryption before upload; files are transferred and stored as uploaded.
-- Desktop tray/minified mode for Windows and Linux.
+- Desktop tray/minified mode for Windows, Linux, and macOS.
 - Desktop clipboard automation: capture clipboard text/images and copy incoming text/images.
 - Production Docker image with nginx in front of the Node API.
 
@@ -52,6 +52,8 @@ Standalone desktop builds are published on the [GitHub Releases](https://github.
 
 - `teleport-windows-x64-standalone.zip`
 - `teleport-linux-x64-standalone.tar.gz`
+- `teleport-macos-x64-standalone.tar.gz`
+- `teleport-macos-arm64-standalone.tar.gz`
 
 The desktop app starts in minified mode by default. Use the tray/status icon to open the compact panel, paste directly, copy/download recent items, or open the full window.
 
@@ -112,9 +114,11 @@ Build standalone desktop binaries:
 ```bash
 npm run desktop:standalone:linux
 npm run desktop:standalone:windows
+npm run desktop:standalone:macos:x64
+npm run desktop:standalone:macos:arm64
 ```
 
-Linux desktop builds require WebKitGTK and appindicator development packages. The CI workflow documents the apt packages used on Ubuntu.
+Linux desktop builds require WebKitGTK and appindicator development packages. macOS target builds must run on macOS. The CI workflow documents the packages and runners used for each platform.
 
 ## Project Structure
 
@@ -146,7 +150,7 @@ Room passwords use the OS credential store when available. Browser-only usage fa
 The repository ships with two workflows:
 
 - `CI`: checks the web/server build, Docker image build, and desktop Tauri project.
-- `Publish`: publishes the Docker image to GitHub Container Registry and uploads Windows/Linux standalone clients to GitHub Releases.
+- `Publish`: publishes the Docker image to GitHub Container Registry and uploads Windows/Linux/macOS standalone clients to GitHub Releases.
 
 Publish a release:
 

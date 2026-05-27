@@ -228,6 +228,28 @@ function normalizeShortcut(value: string, fallback: string) {
   return shortcut;
 }
 
+function shortcutFingerprint(value: string) {
+  const platformModifier = platformShortcutModifier().toLowerCase();
+  return value
+    .split("+")
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean)
+    .map((part) => {
+      if (["ctrl", "control"].includes(part)) return "control";
+      if (["cmd", "command", "meta", "super"].includes(part)) return "command";
+      if (["cmdorctrl", "commandorcontrol", "commandorctrl"].includes(part)) return platformModifier.toLowerCase();
+      if (part === "esc") return "escape";
+      if (/^key[a-z]$/.test(part)) return part.slice(3);
+      return part;
+    })
+    .sort()
+    .join("+");
+}
+
+function shortcutsMatch(left: string, right: string) {
+  return shortcutFingerprint(left) === shortcutFingerprint(right);
+}
+
 function apiUrl(path: string, serverUrl: string) {
   return serverUrl ? `${serverUrl}${path}` : path;
 }
@@ -738,6 +760,7 @@ function App() {
   const [expandedImage, setExpandedImage] = React.useState<Extract<RoomItem, { type: "file" }> | null>(null);
   const [isMiniSettingsOpen, setIsMiniSettingsOpen] = React.useState(false);
   const [settingsMessage, setSettingsMessage] = React.useState("");
+  const [desktopSettingsReady, setDesktopSettingsReady] = React.useState(!desktopMode);
   const [cacheVersion, setCacheVersion] = React.useState(0);
   const pasteBoxRef = React.useRef<HTMLDivElement | null>(null);
   const desktopStoreRef = React.useRef<Store | null>(null);
@@ -747,6 +770,7 @@ function App() {
   const miniWindowDragRef = React.useRef(false);
   const miniWindowDragTimerRef = React.useRef<number | null>(null);
   const clipboardCaptureBusyRef = React.useRef(false);
+  const syntheticShortcutRef = React.useRef(false);
   const lastClipboardCaptureSignatureRef = React.useRef("");
   const lastClipboardWriteSignatureRef = React.useRef("");
   const feedStateRef = React.useRef<{
@@ -849,6 +873,9 @@ function App() {
       })
       .catch(() => {
         // Local storage remains the fallback.
+      })
+      .finally(() => {
+        if (!cancelled) setDesktopSettingsReady(true);
       });
 
     return () => {
@@ -911,14 +938,16 @@ function App() {
     );
     register(shortcuts, async (event) => {
       if (event.state !== "Pressed") return;
-      if (event.shortcut === copyShortcut) {
+      if (syntheticShortcutRef.current) return;
+      if (shortcutsMatch(event.shortcut, copyShortcut)) {
         await sendSelectedItem();
         return;
       }
-      if (event.shortcut === pasteShortcut) {
+      if (shortcutsMatch(event.shortcut, pasteShortcut)) {
         await pasteFirstItem();
         return;
       }
+      if (!shortcutsMatch(event.shortcut, openPanelShortcut)) return;
       await invoke("show_mini_panel").catch(() => undefined);
       window.setTimeout(() => {
         if (mounted) pasteBoxRef.current?.focus();
@@ -932,6 +961,27 @@ function App() {
       if (shortcuts.length) unregister(shortcuts).catch(() => undefined);
     };
   }, [copyShortcut, desktopMode, isMiniWindow, openPanelShortcut, pasteShortcut, visibleItems]);
+
+  React.useEffect(() => {
+    if (!desktopMode || !isMiniWindow || !desktopSettingsReady) return undefined;
+
+    const timer = window.setTimeout(() => {
+      applyDesktopSettings({ automatic: true });
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [
+    autoCaptureClipboard,
+    autoCopyIncoming,
+    copyInput,
+    desktopMode,
+    desktopSettingsReady,
+    isMiniWindow,
+    minifiedMode,
+    notificationsEnabled,
+    openPanelInput,
+    pasteInput,
+    serverInput,
+  ]);
 
   React.useEffect(() => {
     if (!desktopMode || !isMiniWindow) return undefined;
@@ -1271,7 +1321,7 @@ function App() {
 
   async function sendSelectedItem() {
     if (!room) return;
-    await invoke("press_system_shortcut", { action: "copy" }).catch(() => undefined);
+    await pressSystemShortcut("copy");
     await wait(140);
     await pasteClipboardNow({ force: true, useLease: false });
   }
@@ -1308,10 +1358,20 @@ function App() {
     const didCopy = await writeItemToClipboard(firstItem, { preferImage: true });
     if (!didCopy) return;
     await wait(80);
-    await invoke("press_system_shortcut", { action: "paste" }).catch(() => undefined);
+    await pressSystemShortcut("paste");
   }
 
-  async function applyDesktopSettings() {
+  async function pressSystemShortcut(action: "copy" | "paste") {
+    syntheticShortcutRef.current = true;
+    try {
+      await invoke("press_system_shortcut", { action }).catch(() => undefined);
+      await wait(120);
+    } finally {
+      syntheticShortcutRef.current = false;
+    }
+  }
+
+  async function applyDesktopSettings(options: { automatic?: boolean } = {}) {
     try {
       const nextServerUrl = normalizeServerUrl(serverInput) || defaultDesktopServerUrl;
       const nextOpenPanelShortcut = normalizeShortcut(openPanelInput, shortcutDefaults.openPanel);
@@ -1329,7 +1389,7 @@ function App() {
       setCopyInput(nextCopyShortcut);
       setPasteShortcut(nextPasteShortcut);
       setPasteInput(nextPasteShortcut);
-      setSettingsMessage("Saved");
+      setSettingsMessage(options.automatic ? "Auto saved" : "Saved");
       localStorage.setItem(serverUrlKey, nextServerUrl);
       localStorage.setItem(minifiedModeKey, String(minifiedMode));
       localStorage.setItem(openPanelShortcutKey, nextOpenPanelShortcut);
@@ -1675,9 +1735,6 @@ function App() {
 
               <div className="mini-settings-foot">
                 {settingsMessage && <p>{settingsMessage}</p>}
-                <button type="button" onClick={applyDesktopSettings}>
-                  Save
-                </button>
               </div>
             </section>
           ) : !room || isEditingRoom ? (

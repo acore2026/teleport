@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import CryptoJS from "crypto-js";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { register, unregister } from "@tauri-apps/plugin-global-shortcut";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { Store } from "@tauri-apps/plugin-store";
 import {
   ChevronDown,
@@ -82,6 +83,12 @@ type UploadProgress = {
 type RecentRoom = {
   room: string;
   at: number;
+};
+
+type NewItemNotice = {
+  id: string;
+  title: string;
+  detail: string;
 };
 
 type CryptoEnvelope = {
@@ -412,6 +419,19 @@ function isPreviewableImage(item: RoomItem) {
   return item.type === "file" && item.mimeType.startsWith("image/");
 }
 
+function notificationTitleFor(items: RoomItem[]) {
+  if (items.length > 1) return `${items.length} new pastes`;
+  const item = items[0];
+  return item.type === "file" ? item.fileName : "New text paste";
+}
+
+function notificationDetailFor(items: RoomItem[], room: string) {
+  if (items.length > 1) return `Synced to room ${room}`;
+  const item = items[0];
+  if (item.type === "file") return `${formatBytes(item.fileSize)} · ${item.mimeType || "file"}`;
+  return "Synced to room";
+}
+
 async function copyText(text: string) {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(text);
@@ -449,10 +469,18 @@ function App() {
   const [isDragging, setIsDragging] = React.useState(false);
   const [uploadProgress, setUploadProgress] = React.useState<UploadProgress | null>(null);
   const [copiedItemId, setCopiedItemId] = React.useState("");
+  const [newItemNotice, setNewItemNotice] = React.useState<NewItemNotice | null>(null);
   const [expandedImage, setExpandedImage] = React.useState<Extract<RoomItem, { type: "file" }> | null>(null);
   const [cacheVersion, setCacheVersion] = React.useState(0);
   const pasteBoxRef = React.useRef<HTMLDivElement | null>(null);
   const desktopStoreRef = React.useRef<Store | null>(null);
+  const feedStateRef = React.useRef<{
+    key: string;
+    startedAt: number;
+    primed: boolean;
+    ids: Set<string>;
+  } | null>(null);
+  const noticeTimerRef = React.useRef<number | null>(null);
   const visibleItems = React.useMemo(
     () => items.map((item) => readableItem(item, room)),
     [items, room, cacheVersion],
@@ -461,13 +489,14 @@ function App() {
   React.useEffect(() => {
     if (!room) return undefined;
 
+    primeRoomFeed(room);
     loadRoom(room).catch((caught) => {
       setError(caught instanceof Error ? caught.message : "Unable to load room.");
     });
     const events = new EventSource(apiUrl(`/api/rooms/${encodeURIComponent(room)}/events`, serverUrl));
     events.addEventListener("items", (event) => {
       const payload = JSON.parse(event.data) as RoomPayload;
-      setItems(payload.items);
+      syncRoomItems(payload.items, room, true);
     });
 
     return () => {
@@ -538,6 +567,12 @@ function App() {
   }, []);
 
   React.useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
+    };
+  }, []);
+
+  React.useEffect(() => {
     if (!room) return;
     rememberRoom(room);
     setRecentRooms(readRecentRooms());
@@ -593,7 +628,96 @@ function App() {
     const response = await fetch(apiUrl(`/api/rooms/${encodeURIComponent(nextRoom)}/items`, serverUrl));
     const payload = (await response.json()) as RoomPayload | { error: string };
     if (!response.ok) throw new Error("error" in payload ? payload.error : "Unable to load room.");
-    setItems((payload as RoomPayload).items);
+    syncRoomItems((payload as RoomPayload).items, nextRoom, false);
+  }
+
+  function feedKeyFor(nextRoom: string) {
+    return `${serverUrl || "web"}:${nextRoom}`;
+  }
+
+  function primeRoomFeed(nextRoom: string) {
+    feedStateRef.current = {
+      key: feedKeyFor(nextRoom),
+      startedAt: Date.now(),
+      primed: false,
+      ids: new Set(),
+    };
+  }
+
+  function syncRoomItems(nextItems: RoomItem[], nextRoom: string, shouldNotify: boolean) {
+    const key = feedKeyFor(nextRoom);
+    let feedState = feedStateRef.current;
+    if (!feedState || feedState.key !== key) {
+      feedState = {
+        key,
+        startedAt: Date.now(),
+        primed: false,
+        ids: new Set(),
+      };
+    }
+
+    const nextIds = new Set(nextItems.map((item) => item.id));
+    if (!feedState.primed) {
+      feedStateRef.current = { ...feedState, primed: true, ids: nextIds };
+      setItems(nextItems);
+      return;
+    }
+
+    const newItems = nextItems.filter(
+      (item) => !feedState.ids.has(item.id) && item.createdAt >= feedState.startedAt - 1000,
+    );
+    feedStateRef.current = { ...feedState, ids: nextIds };
+    setItems(nextItems);
+
+    if (shouldNotify && newItems.length) {
+      notifyNewItems(newItems, nextRoom);
+    }
+  }
+
+function notifyNewItems(newItems: RoomItem[], nextRoom: string) {
+    const title = notificationTitleFor(newItems);
+    const detail = notificationDetailFor(newItems, nextRoom);
+    setNewItemNotice({
+      id: `${Date.now()}:${newItems.map((item) => item.id).join(",")}`,
+      title,
+      detail,
+    });
+
+    if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = window.setTimeout(() => {
+      setNewItemNotice(null);
+      noticeTimerRef.current = null;
+    }, 4200);
+
+    if (desktopMode) {
+      sendDesktopNotification(title, detail, nextRoom);
+      return;
+    }
+
+    if ("Notification" in window && Notification.permission === "granted" && (document.hidden || !document.hasFocus())) {
+      new Notification("teleport", {
+        body: `${title} · ${detail}`,
+        tag: `teleport:${nextRoom}`,
+      });
+    }
+  }
+
+  async function sendDesktopNotification(title: string, detail: string, nextRoom: string) {
+    try {
+      let permissionGranted = await isPermissionGranted();
+      if (!permissionGranted) {
+        permissionGranted = (await requestPermission()) === "granted";
+      }
+      if (!permissionGranted) return;
+
+      sendNotification({
+        title,
+        body: `${detail} · ${nextRoom}`,
+        group: `teleport:${nextRoom}`,
+      });
+    } catch {
+      // The in-app notice above remains the fallback.
+    }
   }
 
   async function enterRoom(value = roomInput, passwordValue?: string) {
@@ -672,7 +796,7 @@ function App() {
       }
     }
 
-    setItems(nextItems);
+    syncRoomItems(nextItems, room, false);
   }
 
   function uploadFile(file: File, index: number, totalFiles: number) {
@@ -757,7 +881,7 @@ function App() {
 
       try {
         const payload = await uploadFile(file, i + 1, batch.length);
-        setItems(payload.items);
+        syncRoomItems(payload.items, room, false);
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : `Upload failed for ${file.name}.`);
       }
@@ -772,7 +896,7 @@ function App() {
       { method: "DELETE" },
     );
     const payload = (await response.json()) as RoomPayload | { error: string };
-    if (response.ok) setItems((payload as RoomPayload).items);
+    if (response.ok) syncRoomItems((payload as RoomPayload).items, room, false);
   }
 
   async function copyItem(item: RoomItem) {
@@ -970,6 +1094,18 @@ function App() {
           )}
         </section>
       </section>
+
+      {newItemNotice && (
+        <div className="new-item-notice" role="status" aria-live="polite">
+          <span>
+            <Clipboard size={16} />
+          </span>
+          <div>
+            <strong>{newItemNotice.title}</strong>
+            <p>{newItemNotice.detail}</p>
+          </div>
+        </div>
+      )}
 
       {!room && isEditingRoom && (
         <div className="room-intro-overlay" role="dialog" aria-modal="true" aria-label="Create or join a room">

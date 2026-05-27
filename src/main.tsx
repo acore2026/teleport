@@ -668,6 +668,12 @@ async function copyText(text: string) {
   rememberClipboardWriteSignature(clipboardTextSignature(text));
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 function App() {
   const desktopMode = React.useMemo(isDesktopRuntime, []);
   const currentWindowLabel = React.useMemo(() => {
@@ -906,15 +912,11 @@ function App() {
     register(shortcuts, async (event) => {
       if (event.state !== "Pressed") return;
       if (event.shortcut === copyShortcut) {
-        await copyNewestItem();
+        await sendSelectedItem();
         return;
       }
       if (event.shortcut === pasteShortcut) {
-        await invoke("show_mini_panel").catch(() => undefined);
-        await pasteClipboardNow({ useLease: false });
-        window.setTimeout(() => {
-          if (mounted) pasteBoxRef.current?.focus();
-        }, 80);
+        await pasteFirstItem();
         return;
       }
       await invoke("show_mini_panel").catch(() => undefined);
@@ -1219,7 +1221,7 @@ function App() {
     await enterRoom(nextRoom, nextPassword);
   }
 
-  async function pasteClipboardNow(options: { useLease?: boolean } = {}) {
+  async function pasteClipboardNow(options: { force?: boolean; useLease?: boolean } = {}) {
     if (!room) {
       setError("Create or join a room first.");
       setIsEditingRoom(true);
@@ -1235,8 +1237,9 @@ function App() {
       if (text.trim()) {
         const signature = clipboardTextSignature(text);
         if (
-          signature !== lastClipboardCaptureSignatureRef.current &&
-          !wasClipboardWrittenByTeleport(signature, lastClipboardWriteSignatureRef.current)
+          options.force ||
+          (signature !== lastClipboardCaptureSignatureRef.current &&
+            !wasClipboardWrittenByTeleport(signature, lastClipboardWriteSignatureRef.current))
         ) {
           lastClipboardCaptureSignatureRef.current = signature;
           await uploadText(text);
@@ -1248,8 +1251,9 @@ function App() {
       if (!image) return;
       const { blob, signature } = await imageToPngBlob(image);
       if (
-        signature === lastClipboardCaptureSignatureRef.current ||
-        wasClipboardWrittenByTeleport(signature, lastClipboardWriteSignatureRef.current)
+        !options.force &&
+        (signature === lastClipboardCaptureSignatureRef.current ||
+          wasClipboardWrittenByTeleport(signature, lastClipboardWriteSignatureRef.current))
       ) {
         return;
       }
@@ -1265,9 +1269,46 @@ function App() {
     }
   }
 
-  async function copyNewestItem() {
-    const newestItem = visibleItems.find((item) => item.type === "file" || item.textContent);
-    if (newestItem) await copyItem(newestItem);
+  async function sendSelectedItem() {
+    if (!room) return;
+    await invoke("press_system_shortcut", { action: "copy" }).catch(() => undefined);
+    await wait(140);
+    await pasteClipboardNow({ force: true, useLease: false });
+  }
+
+  async function writeItemToClipboard(item: RoomItem, options: { preferImage?: boolean } = {}) {
+    if (item.type === "text") {
+      if (!item.textContent) return false;
+      await copyText(item.textContent);
+      return true;
+    }
+
+    const itemUrl = absoluteItemUrl(item.downloadUrl, serverUrl);
+    if (options.preferImage && item.mimeType.startsWith("image/")) {
+      const response = await fetch(itemUrl);
+      if (!response.ok) return false;
+      const bytes = await blobToPngBytes(await response.blob());
+      const image = await Image.fromBytes(bytes);
+      const size = await image.size();
+      const rgba = await image.rgba();
+      const signature = clipboardImageSignature(size.width, size.height, rgba);
+      lastClipboardWriteSignatureRef.current = signature;
+      rememberClipboardWriteSignature(signature);
+      await writeClipboardImage(image);
+      return true;
+    }
+
+    await copyText(itemUrl);
+    return true;
+  }
+
+  async function pasteFirstItem() {
+    const firstItem = visibleItems.find((item) => item.type === "file" || item.textContent);
+    if (!firstItem) return;
+    const didCopy = await writeItemToClipboard(firstItem, { preferImage: true });
+    if (!didCopy) return;
+    await wait(80);
+    await invoke("press_system_shortcut", { action: "paste" }).catch(() => undefined);
   }
 
   async function applyDesktopSettings() {
@@ -1489,13 +1530,8 @@ function App() {
   }
 
   async function copyItem(item: RoomItem) {
-    if (item.type === "file") {
-      await copyText(absoluteItemUrl(item.downloadUrl, serverUrl));
-    } else if (item.textContent) {
-      await copyText(item.textContent);
-    } else {
-      return;
-    }
+    const didCopy = await writeItemToClipboard(item);
+    if (!didCopy) return;
 
     setCopiedItemId(item.id);
     window.setTimeout(() => {

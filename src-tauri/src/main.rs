@@ -1,5 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use enigo::{
+    Direction::{Click, Press, Release},
+    Enigo, Key, Keyboard, Settings,
+};
+use std::{thread, time::Duration};
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
@@ -84,6 +89,30 @@ fn toggle_mini_panel(app: AppHandle) -> Result<(), String> {
     } else {
         show_mini_window_at(&app, None)
     }
+}
+
+#[tauri::command]
+fn press_system_shortcut(action: String) -> Result<(), String> {
+    let key = match action.as_str() {
+        "copy" => 'c',
+        "paste" => 'v',
+        _ => return Err("Unsupported shortcut action.".to_string()),
+    };
+    let modifier = if cfg!(target_os = "macos") {
+        Key::Meta
+    } else {
+        Key::Control
+    };
+    let mut enigo = Enigo::new(&Settings::default()).map_err(|error| error.to_string())?;
+    enigo.key(modifier, Press).map_err(|error| error.to_string())?;
+    thread::sleep(Duration::from_millis(20));
+    enigo
+        .key(Key::Unicode(key), Click)
+        .map_err(|error| error.to_string())?;
+    thread::sleep(Duration::from_millis(20));
+    enigo
+        .key(modifier, Release)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -176,6 +205,7 @@ fn main() {
             show_mini_panel,
             hide_mini_panel,
             toggle_mini_panel,
+            press_system_shortcut,
             keychain_get,
             keychain_set,
             keychain_delete

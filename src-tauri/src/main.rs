@@ -9,7 +9,7 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, PhysicalPosition,
+    AppHandle, Manager, PhysicalPosition, WebviewWindow,
 };
 
 const SERVICE_NAME: &str = "teleport";
@@ -92,6 +92,11 @@ fn toggle_mini_panel(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_debug_tools(window: WebviewWindow) {
+    window.open_devtools();
+}
+
+#[tauri::command]
 fn press_system_shortcut(action: String) -> Result<(), String> {
     let key = match action.as_str() {
         "copy" => 'c',
@@ -104,7 +109,9 @@ fn press_system_shortcut(action: String) -> Result<(), String> {
         Key::Control
     };
     let mut enigo = Enigo::new(&Settings::default()).map_err(|error| error.to_string())?;
-    enigo.key(modifier, Press).map_err(|error| error.to_string())?;
+    enigo
+        .key(modifier, Press)
+        .map_err(|error| error.to_string())?;
     thread::sleep(Duration::from_millis(20));
     enigo
         .key(Key::Unicode(key), Click)
@@ -205,6 +212,7 @@ fn main() {
             show_mini_panel,
             hide_mini_panel,
             toggle_mini_panel,
+            open_debug_tools,
             press_system_shortcut,
             keychain_get,
             keychain_set,

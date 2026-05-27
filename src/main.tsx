@@ -896,6 +896,18 @@ function App() {
   React.useEffect(() => {
     if (!desktopMode) return undefined;
 
+    const openDebugTools = (event: KeyboardEvent) => {
+      if (event.key !== "F12") return;
+      event.preventDefault();
+      invoke("open_debug_tools").catch(() => undefined);
+    };
+    window.addEventListener("keydown", openDebugTools);
+    return () => window.removeEventListener("keydown", openDebugTools);
+  }, [desktopMode]);
+
+  React.useEffect(() => {
+    if (!desktopMode) return undefined;
+
     let cancelled = false;
     let unlisten: (() => void) | undefined;
     listen<DesktopStateSync>("teleport-state-sync", async ({ payload }) => {

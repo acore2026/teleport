@@ -135,6 +135,8 @@ const toggleMiniShortcutKey = "teleport-shortcut-toggle-mini";
 const openFullShortcutKey = "teleport-shortcut-open-full";
 const autoCaptureClipboardKey = "teleport-auto-capture-clipboard";
 const autoCopyIncomingKey = "teleport-auto-copy-incoming";
+const clipboardLeaseKey = "teleport-clipboard-capture-lease";
+const clipboardWriteSignatureKey = "teleport-clipboard-write-signature";
 const defaultDesktopServerUrl = "http://101.245.78.174:7777";
 const defaultShortcuts: DesktopShortcuts = {
   toggleMini: "CommandOrControl+Shift+V",
@@ -521,6 +523,39 @@ function stampFileName(prefix: string, extension: string) {
   return `${prefix}-${stamp}.${extension}`;
 }
 
+function tryClaimClipboardCaptureLease(owner: string) {
+  const now = Date.now();
+  try {
+    const current = JSON.parse(localStorage.getItem(clipboardLeaseKey) || "null") as
+      | { owner?: string; expiresAt?: number }
+      | null;
+    if (current?.owner && current.owner !== owner && Number(current.expiresAt) > now) return false;
+
+    const next = JSON.stringify({ owner, expiresAt: now + 5000 });
+    localStorage.setItem(clipboardLeaseKey, next);
+    return localStorage.getItem(clipboardLeaseKey) === next;
+  } catch {
+    return true;
+  }
+}
+
+function rememberClipboardWriteSignature(signature: string) {
+  try {
+    localStorage.setItem(clipboardWriteSignatureKey, signature);
+  } catch {
+    // The in-memory signature remains the fallback.
+  }
+}
+
+function wasClipboardWrittenByTeleport(signature: string, currentWindowSignature: string) {
+  if (signature === currentWindowSignature) return true;
+  try {
+    return localStorage.getItem(clipboardWriteSignatureKey) === signature;
+  } catch {
+    return false;
+  }
+}
+
 async function imageToPngBlob(image: Image) {
   const size = await image.size();
   const rgba = await image.rgba();
@@ -632,6 +667,9 @@ function App() {
   const [cacheVersion, setCacheVersion] = React.useState(0);
   const pasteBoxRef = React.useRef<HTMLDivElement | null>(null);
   const desktopStoreRef = React.useRef<Store | null>(null);
+  const clipboardOwnerRef = React.useRef(
+    `${currentWindowLabel}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+  );
   const miniWindowDragRef = React.useRef(false);
   const miniWindowDragTimerRef = React.useRef<number | null>(null);
   const clipboardCaptureBusyRef = React.useRef(false);
@@ -817,9 +855,7 @@ function App() {
     const unlisteners: Array<() => void> = [];
     currentWindow.onFocusChanged(({ payload }) => {
       if (!payload) {
-        window.setTimeout(() => {
-          if (!disposed && !miniWindowDragRef.current) invoke("hide_mini_panel").catch(() => undefined);
-        }, 260);
+        if (!disposed && !miniWindowDragRef.current) invoke("hide_mini_panel").catch(() => undefined);
       }
     }).then((unlisten) => unlisteners.push(unlisten));
     onAction(() => {
@@ -838,19 +874,21 @@ function App() {
   }, [desktopMode, isMiniWindow]);
 
   React.useEffect(() => {
-    if (!desktopMode || !isMiniWindow || !autoCaptureClipboard || !room) return undefined;
+    if (!desktopMode || !autoCaptureClipboard || !room) return undefined;
 
     let disposed = false;
     const captureClipboard = async () => {
       if (disposed || clipboardCaptureBusyRef.current) return;
       clipboardCaptureBusyRef.current = true;
       try {
+        if (!tryClaimClipboardCaptureLease(clipboardOwnerRef.current)) return;
+
         const text = await readClipboardText().catch(() => "");
         if (text.trim()) {
           const signature = clipboardTextSignature(text);
           if (
             signature !== lastClipboardCaptureSignatureRef.current &&
-            signature !== lastClipboardWriteSignatureRef.current
+            !wasClipboardWrittenByTeleport(signature, lastClipboardWriteSignatureRef.current)
           ) {
             lastClipboardCaptureSignatureRef.current = signature;
             await uploadText(text);
@@ -863,7 +901,7 @@ function App() {
         const { blob, signature } = await imageToPngBlob(image);
         if (
           signature === lastClipboardCaptureSignatureRef.current ||
-          signature === lastClipboardWriteSignatureRef.current
+          wasClipboardWrittenByTeleport(signature, lastClipboardWriteSignatureRef.current)
         ) {
           return;
         }
@@ -887,7 +925,7 @@ function App() {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [autoCaptureClipboard, desktopMode, isMiniWindow, room, roomPassword, serverUrl]);
+  }, [autoCaptureClipboard, desktopMode, room, roomPassword, serverUrl]);
 
   React.useEffect(() => {
     const timer = setInterval(() => setItems((current) => [...current]), 30000);
@@ -1004,7 +1042,7 @@ function App() {
   }
 
   async function copyIncomingItems(newItems: RoomItem[], nextRoom: string) {
-    if (!desktopMode || !isMiniWindow || !autoCopyIncoming) return;
+    if (!desktopMode || !autoCopyIncoming) return;
     const item = newItems.find(
       (candidate) => candidate.type === "text" || (candidate.type === "file" && candidate.mimeType.startsWith("image/")),
     );
@@ -1022,6 +1060,7 @@ function App() {
       }
       if (!text) return;
       lastClipboardWriteSignatureRef.current = clipboardTextSignature(text);
+      rememberClipboardWriteSignature(lastClipboardWriteSignatureRef.current);
       await writeClipboardText(text);
       return;
     }
@@ -1033,6 +1072,7 @@ function App() {
     const size = await image.size();
     const rgba = await image.rgba();
     lastClipboardWriteSignatureRef.current = clipboardImageSignature(size.width, size.height, rgba);
+    rememberClipboardWriteSignature(lastClipboardWriteSignatureRef.current);
     await writeClipboardImage(image);
   }
 

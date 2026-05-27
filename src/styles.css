@@ -1196,7 +1196,7 @@ button {
 }
 
 .mini-shell {
-  min-height: 100vh;
+  min-height: 100dvh;
   overflow: hidden;
   background:
     radial-gradient(circle at top left, rgba(124, 58, 237, 0.12), transparent 38%),
@@ -1290,7 +1290,7 @@ button {
 .mini-content {
   display: grid;
   gap: 0.75rem;
-  height: calc(100vh - 3rem);
+  height: calc(100dvh - 3rem);
   overflow: auto;
   padding: 0.75rem;
 }
@@ -1489,11 +1489,46 @@ button {
 .mini-items-list {
   display: grid;
   gap: 0.45rem;
-  max-height: 17rem;
+  max-height: clamp(10rem, calc(100dvh - 15rem), 24rem);
   margin: 0;
   overflow: auto;
   padding: 0.55rem;
   list-style: none;
+}
+
+@media (max-width: 520px), (max-height: 520px) {
+  .mini-titlebar {
+    min-height: 2.7rem;
+    padding: 0 0.6rem;
+  }
+
+  .mini-content {
+    gap: 0.55rem;
+    height: calc(100dvh - 2.7rem);
+    padding: 0.55rem;
+  }
+
+  .mini-paste-box {
+    min-height: 4.5rem;
+    padding: 0.7rem;
+  }
+
+  .mini-paste-box > span,
+  .mini-file-icon,
+  .mini-thumb {
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+
+  .mini-items-list {
+    max-height: clamp(8rem, calc(100dvh - 13rem), 20rem);
+    padding: 0.45rem;
+  }
+
+  .mini-item {
+    gap: 0.35rem;
+    padding: 0.35rem;
+  }
 }
 
 .mini-item {

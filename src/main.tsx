@@ -6,6 +6,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { Image } from "@tauri-apps/api/image";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  clear as clearClipboard,
   readImage as readClipboardImage,
   readText as readClipboardText,
   writeImage as writeClipboardImage,
@@ -92,6 +93,11 @@ type UploadProgress = {
   total: number;
   processing: boolean;
 };
+
+type ClipboardSnapshot =
+  | { type: "text"; text: string; signature: string }
+  | { type: "image"; image: Image; signature: string }
+  | { type: "empty" };
 
 type RecentRoom = {
   room: string;
@@ -185,11 +191,13 @@ function platformShortcutModifier() {
 function desktopShortcutDefaults(): DesktopShortcuts {
   const modifier = platformShortcutModifier();
   return {
-    openPanel: `${modifier}+Shift+P`,
+    openPanel: `${modifier}+Alt+P`,
     copy: `${modifier}+Shift+C`,
     paste: `${modifier}+Shift+V`,
   };
 }
+
+const legacyOpenPanelShortcuts = ["Control+Shift+P", "Command+Shift+P"];
 
 function initialBooleanSetting(key: string, fallback: boolean) {
   if (!isDesktopRuntime()) return fallback;
@@ -201,10 +209,14 @@ function initialBooleanSetting(key: string, fallback: boolean) {
   }
 }
 
-function initialShortcut(key: string, fallback: string) {
+function normalizeStoredShortcut(value: string, fallback: string, legacyValues: string[] = []) {
+  return legacyValues.includes(value) ? fallback : value || fallback;
+}
+
+function initialShortcut(key: string, fallback: string, legacyValues: string[] = []) {
   if (!isDesktopRuntime()) return fallback;
   try {
-    return localStorage.getItem(key) || fallback;
+    return normalizeStoredShortcut(localStorage.getItem(key) || "", fallback, legacyValues);
   } catch {
     return fallback;
   }
@@ -226,6 +238,54 @@ function normalizeShortcut(value: string, fallback: string) {
     throw new Error(`Shortcut must include at least one modifier, for example ${fallback}.`);
   }
   return shortcut;
+}
+
+function displayShortcut(value: string) {
+  return value
+    .split("+")
+    .map((part) => {
+      const normalized = part.trim().toLowerCase();
+      if (["control", "ctrl"].includes(normalized)) return "Ctrl";
+      if (["command", "cmd", "meta", "super"].includes(normalized)) return platformShortcutModifier() === "Command" ? "⌘" : "Ctrl";
+      if (normalized === "shift") return "Shift";
+      if (normalized === "alt" || normalized === "option") return platformShortcutModifier() === "Command" ? "Option" : "Alt";
+      if (normalized === "space") return "Space";
+      return part.trim();
+    })
+    .filter(Boolean)
+    .join(" + ");
+}
+
+function shortcutFromKeyboardEvent(event: React.KeyboardEvent<HTMLInputElement>) {
+  const key = shortcutKeyFromEvent(event);
+  if (!key) return "";
+
+  const modifier = platformShortcutModifier();
+  const parts: string[] = [];
+  if (modifier === "Command" ? event.metaKey : event.ctrlKey) parts.push(modifier);
+  if (event.altKey) parts.push("Alt");
+  if (event.shiftKey) parts.push("Shift");
+  if (modifier === "Command" && event.ctrlKey) parts.push("Control");
+  if (modifier === "Control" && event.metaKey) parts.push("Command");
+  if (!parts.length) return "";
+  parts.push(key);
+  return parts.join("+");
+}
+
+function shortcutKeyFromEvent(event: React.KeyboardEvent<HTMLInputElement>) {
+  if (["Control", "Shift", "Alt", "Meta", "OS"].includes(event.key)) return "";
+  if (/^Key[A-Z]$/.test(event.code)) return event.code.slice(3);
+  if (/^Digit[0-9]$/.test(event.code)) return event.code.slice(5);
+  if (/^Numpad[0-9]$/.test(event.code)) return event.code.slice(6);
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(event.key)) return event.key;
+  if (event.code === "Space") return "Space";
+  if (event.key.startsWith("Arrow")) return event.key;
+  if (event.key === "Escape") return "Escape";
+  if (event.key === "Tab") return "Tab";
+  if (event.key === "Backspace") return "Backspace";
+  if (event.key === "Delete") return "Delete";
+  if (event.key.length === 1) return event.key.toUpperCase();
+  return event.key;
 }
 
 function shortcutFingerprint(value: string) {
@@ -647,6 +707,33 @@ async function imageToPngBlob(image: Image) {
   return { blob, signature: clipboardImageSignature(size.width, size.height, rgba) };
 }
 
+async function readClipboardSnapshot(): Promise<ClipboardSnapshot> {
+  const text = await readClipboardText().catch(() => "");
+  if (text) return { type: "text", text, signature: clipboardTextSignature(text) };
+
+  const image = await readClipboardImage().catch(() => null);
+  if (!image) return { type: "empty" };
+  const size = await image.size();
+  const rgba = await image.rgba();
+  return {
+    type: "image",
+    image,
+    signature: clipboardImageSignature(size.width, size.height, rgba),
+  };
+}
+
+async function restoreClipboardSnapshot(snapshot: ClipboardSnapshot) {
+  if (snapshot.type === "text") {
+    await writeClipboardText(snapshot.text).catch(() => undefined);
+    return;
+  }
+  if (snapshot.type === "image") {
+    await writeClipboardImage(snapshot.image).catch(() => undefined);
+    return;
+  }
+  await clearClipboard().catch(() => undefined);
+}
+
 async function blobToPngBytes(blob: Blob) {
   if (blob.type === "image/png") return new Uint8Array(await blob.arrayBuffer());
 
@@ -729,7 +816,7 @@ function App() {
   const [serverUrl, setServerUrl] = React.useState(initialServerValue);
   const [minifiedMode, setMinifiedMode] = React.useState(initialMinifiedValue);
   const [openPanelShortcut, setOpenPanelShortcut] = React.useState(() =>
-    initialShortcut(openPanelShortcutKey, shortcutDefaults.openPanel),
+    initialShortcut(openPanelShortcutKey, shortcutDefaults.openPanel, legacyOpenPanelShortcuts),
   );
   const [copyShortcut, setCopyShortcut] = React.useState(() =>
     initialShortcut(copyShortcutKey, shortcutDefaults.copy),
@@ -832,8 +919,11 @@ function App() {
         const storedRoom = (await store.get<string>(roomKey)) || initialRoomValue;
         const storedMinified = (await store.get<boolean>(minifiedModeKey)) ?? initialMinifiedValue;
         const storedOpenPanelShortcut =
-          (await store.get<string>(openPanelShortcutKey)) ||
-          initialShortcut(openPanelShortcutKey, shortcutDefaults.openPanel);
+          normalizeStoredShortcut(
+            (await store.get<string>(openPanelShortcutKey)) || "",
+            shortcutDefaults.openPanel,
+            legacyOpenPanelShortcuts,
+          ) || initialShortcut(openPanelShortcutKey, shortcutDefaults.openPanel, legacyOpenPanelShortcuts);
         const storedCopyShortcut =
           (await store.get<string>(copyShortcutKey)) || initialShortcut(copyShortcutKey, shortcutDefaults.copy);
         const storedPasteShortcut =
@@ -1333,9 +1423,47 @@ function App() {
 
   async function sendSelectedItem() {
     if (!room) return;
-    await pressSystemShortcut("copy");
-    await wait(140);
-    await pasteClipboardNow({ force: true, useLease: false });
+    if (clipboardCaptureBusyRef.current) return;
+
+    clipboardCaptureBusyRef.current = true;
+    const sentinel = `teleport-selection-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const previousClipboard = await readClipboardSnapshot();
+    try {
+      await writeClipboardText(sentinel);
+      await wait(40);
+      await pressSystemShortcut("copy");
+      const selected = await readClipboardSnapshot();
+
+      if (selected.type === "text" && selected.text === sentinel) {
+        await restoreClipboardSnapshot(previousClipboard);
+        return;
+      }
+
+      if (selected.type === "empty") {
+        await restoreClipboardSnapshot(previousClipboard);
+        return;
+      }
+
+      if (selected.type === "text") {
+        if (!selected.text.trim()) return;
+        lastClipboardCaptureSignatureRef.current = selected.signature;
+        await uploadText(selected.text);
+        return;
+      }
+
+      if (selected.type === "image") {
+        const { blob, signature } = await imageToPngBlob(selected.image);
+        lastClipboardCaptureSignatureRef.current = signature;
+        await uploadFiles([
+          new File([blob], stampFileName("selection-image", "png"), {
+            type: "image/png",
+            lastModified: Date.now(),
+          }),
+        ]);
+      }
+    } finally {
+      clipboardCaptureBusyRef.current = false;
+    }
   }
 
   async function writeItemToClipboard(item: RoomItem, options: { preferImage?: boolean } = {}) {
@@ -1733,15 +1861,15 @@ function App() {
                 </label>
                 <label>
                   <span>Open panel</span>
-                  <input value={openPanelInput} onChange={(event) => setOpenPanelInput(event.target.value)} />
+                  <ShortcutInput value={openPanelInput} onChange={setOpenPanelInput} />
                 </label>
                 <label>
                   <span>Copy</span>
-                  <input value={copyInput} onChange={(event) => setCopyInput(event.target.value)} />
+                  <ShortcutInput value={copyInput} onChange={setCopyInput} />
                 </label>
                 <label>
                   <span>Paste</span>
-                  <input value={pasteInput} onChange={(event) => setPasteInput(event.target.value)} />
+                  <ShortcutInput value={pasteInput} onChange={setPasteInput} />
                 </label>
               </div>
 
@@ -2061,6 +2189,33 @@ function App() {
         </div>
       )}
     </main>
+  );
+}
+
+function ShortcutInput({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <input
+      className="shortcut-input"
+      readOnly
+      value={displayShortcut(value)}
+      placeholder="Click, then press keys"
+      title="Click, then press a key combination"
+      onFocus={(event) => event.currentTarget.select()}
+      onKeyDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const input = event.currentTarget;
+        if (event.key === "Escape") {
+          input.blur();
+          return;
+        }
+        const nextShortcut = shortcutFromKeyboardEvent(event);
+        if (nextShortcut) {
+          onChange(nextShortcut);
+          window.setTimeout(() => input.select(), 0);
+        }
+      }}
+    />
   );
 }
 

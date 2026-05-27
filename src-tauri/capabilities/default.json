@@ -9,6 +9,7 @@
     "notification:allow-register-listener",
     "opener:default",
     "store:default",
+    "clipboard-manager:allow-clear",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-read-image",
     "clipboard-manager:allow-write-text",

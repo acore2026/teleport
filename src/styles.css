@@ -1387,6 +1387,11 @@ button {
   box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.08);
 }
 
+.mini-settings-form .shortcut-input {
+  cursor: pointer;
+  user-select: none;
+}
+
 .mini-toggle {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;

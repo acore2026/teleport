@@ -2,14 +2,14 @@
 
 ## Project Structure & Module Organization
 
-This repository contains `teleport`, a room-based paste and file sync app. The React/Vite frontend lives in `src/`, with the main component in `src/main.tsx` and global styling in `src/styles.css`. The TypeScript Node/Express API, SQLite storage, upload handling, SSE room updates, and static asset serving are in `server.ts`. Production container files are in `docker/`, `Dockerfile`, and `docker-compose.yml`. Runtime data is stored under `data/` locally, or `/app/data` in Docker; do not commit uploaded files or SQLite databases. `public/` contains legacy/static assets and should not be the primary place for new app code.
+This repository contains `teleport`, a room-based paste and file sync app. The React/Vite frontend lives in `src/`, with the main component in `src/main.tsx` and global styling in `src/styles.css`. The TypeScript Node/Express API, SQLite storage, upload handling, SSE room updates, and static asset serving are in `server/`. Production container files are in `docker/`, `Dockerfile`, and `docker-compose.yml`. README screenshots and design references live in `docs/assets/`. Runtime data is stored under `data/` locally, or `/app/data` in Docker; do not commit uploaded files or SQLite databases.
 
 ## Build, Test, and Development Commands
 
 - `npm install`: install dependencies from `package-lock.json`.
 - `npm run dev`: start the Vite dev server on `0.0.0.0`.
-- `npm run build`: type-check the frontend, compile `server.ts` into `dist-server/`, then build frontend assets into `dist/`.
-- `npm start`: run the compiled backend from `dist-server/server.js`.
+- `npm run build`: type-check the frontend, compile `server/` into `dist-server/`, then build frontend assets into `dist/`.
+- `npm start`: run the compiled backend from `dist-server/index.js`.
 - `docker build -t teleport:production .`: build the nginx + Node production image.
 - `docker compose up -d --build`: build and run the production stack on port `7777`.
 
@@ -23,7 +23,7 @@ There is no dedicated test runner configured. Treat `npm run build` as the requi
 
 ## Commit & Pull Request Guidelines
 
-Git history is not available in this working copy, so use concise imperative commit messages such as `Add room intro prompt` or `Fix image paste preview`. Pull requests should include a short summary, verification steps, screenshots for UI changes, and any migration or data-volume notes.
+Use concise imperative commit messages such as `Add room intro prompt` or `Fix image paste preview`. Pull requests should include a short summary, verification steps, screenshots for UI changes, and any migration or data-volume notes.
 
 ## Security & Configuration Tips
 

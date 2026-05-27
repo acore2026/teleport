@@ -20,7 +20,8 @@ RUN apk add --no-cache nginx
 
 ENV NODE_ENV=production \
     HOST=127.0.0.1 \
-    NODE_PORT=3000
+    NODE_PORT=3000 \
+    DATA_DIR=/app/data
 
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist

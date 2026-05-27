@@ -4,7 +4,7 @@ set -eu
 export PORT="${NODE_PORT:-3000}"
 export HOST="${HOST:-127.0.0.1}"
 
-node --no-warnings /app/dist-server/server.js &
+node --no-warnings /app/dist-server/index.js &
 node_pid="$!"
 
 term() {

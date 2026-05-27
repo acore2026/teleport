@@ -4,6 +4,7 @@ data/uploads/
 data/tmp/
 dist/
 dist-server/
+release-artifacts/
 node_modules/
 src-tauri/gen/
 src-tauri/icons/64x64.png
@@ -12,3 +13,4 @@ src-tauri/icons/StoreLogo.png
 src-tauri/icons/android/
 src-tauri/icons/ios/
 src-tauri/target/
+*.log

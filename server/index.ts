@@ -3,7 +3,6 @@ import { createReadStream, existsSync, mkdirSync, rmSync, statSync, unlinkSync }
 import { rename } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
 import express from "express";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import multer from "multer";
@@ -41,9 +40,9 @@ type RoomPayload = {
 
 type AsyncHandler = (req: Request, res: Response, next: NextFunction) => Promise<void> | void;
 
-const __dirname = fileURLToPath(new URL(".", import.meta.url));
-const distDir = join(__dirname, "dist");
-const dataDir = join(__dirname, "data");
+const appRoot = process.cwd();
+const distDir = join(appRoot, "dist");
+const dataDir = process.env.DATA_DIR ? resolve(process.env.DATA_DIR) : join(appRoot, "data");
 const uploadRoot = join(dataDir, "uploads");
 const tempRoot = join(dataDir, "tmp");
 const dbPath = join(dataDir, "pasteroom.sqlite");
@@ -187,7 +186,7 @@ function hashFile(path: string) {
 
 function removeStoredFile(filePath: string | null) {
   if (!filePath) return;
-  const absolutePath = resolve(__dirname, filePath);
+  const absolutePath = resolve(appRoot, filePath);
   if (!absolutePath.startsWith(resolve(uploadRoot))) return;
   rmSync(dirname(absolutePath), { recursive: true, force: true });
 }
@@ -334,7 +333,7 @@ app.post(
       const storedPath = join(roomDir, fileName);
       await rename(req.file.path, storedPath);
 
-      const relativePath = relative(__dirname, storedPath);
+      const relativePath = relative(appRoot, storedPath);
       const hash = await hashFile(storedPath);
       insertItem.run(
         id,
@@ -401,7 +400,7 @@ app.get("/api/rooms/:room/items/:id/download", (req, res, next) => {
       return;
     }
 
-    const filePath = resolve(__dirname, row.filePath);
+    const filePath = resolve(appRoot, row.filePath);
     if (!filePath.startsWith(resolve(uploadRoot)) || !existsSync(filePath)) {
       res.status(404).json({ error: "File not found." });
       return;

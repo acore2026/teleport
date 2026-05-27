@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && tsc -p tsconfig.server.json && vite build",
-    "start": "node --no-warnings dist-server/server.js",
+    "start": "node --no-warnings dist-server/index.js",
     "desktop:dev": "tauri dev",
     "desktop:check": "tsc --noEmit && cargo check --manifest-path src-tauri/Cargo.toml",
     "desktop:build": "tauri build --no-bundle",

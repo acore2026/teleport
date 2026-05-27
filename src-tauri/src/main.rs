@@ -4,7 +4,7 @@ use tauri::{
   image::Image,
   menu::{Menu, MenuItem},
   tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-  AppHandle, Manager,
+  AppHandle, Manager, PhysicalPosition,
 };
 
 const SERVICE_NAME: &str = "teleport";
@@ -18,9 +18,56 @@ fn show_main_window(app: &AppHandle) -> Result<(), String> {
   window.set_focus().map_err(|error| error.to_string())
 }
 
+fn show_mini_window_at(app: &AppHandle, position: Option<(f64, f64)>) -> Result<(), String> {
+  let window = app
+    .get_webview_window("mini")
+    .ok_or_else(|| "Mini window is unavailable.".to_string())?;
+  if let Some((x, y)) = position {
+    let x = (x as i32 - 400).max(8);
+    let y = (y as i32 + 10).max(8);
+    let _ = window.set_position(PhysicalPosition::new(x, y));
+  }
+  window.show().map_err(|error| error.to_string())?;
+  window.unminimize().map_err(|error| error.to_string())?;
+  window.set_focus().map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn focus_main_window(app: AppHandle) -> Result<(), String> {
   show_main_window(&app)
+}
+
+#[tauri::command]
+fn show_full_window(app: AppHandle) -> Result<(), String> {
+  if let Some(window) = app.get_webview_window("mini") {
+    let _ = window.hide();
+  }
+  show_main_window(&app)
+}
+
+#[tauri::command]
+fn show_mini_panel(app: AppHandle) -> Result<(), String> {
+  show_mini_window_at(&app, None)
+}
+
+#[tauri::command]
+fn hide_mini_panel(app: AppHandle) -> Result<(), String> {
+  let window = app
+    .get_webview_window("mini")
+    .ok_or_else(|| "Mini window is unavailable.".to_string())?;
+  window.hide().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn toggle_mini_panel(app: AppHandle) -> Result<(), String> {
+  let window = app
+    .get_webview_window("mini")
+    .ok_or_else(|| "Mini window is unavailable.".to_string())?;
+  if window.is_visible().unwrap_or(false) {
+    window.hide().map_err(|error| error.to_string())
+  } else {
+    show_mini_window_at(&app, None)
+  }
 }
 
 #[tauri::command]
@@ -53,10 +100,11 @@ fn keychain_delete(room: String) -> Result<(), String> {
 }
 
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
-  let show_item = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
-  let hide_item = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
+  let panel_item = MenuItem::with_id(app, "panel", "Open panel", true, None::<&str>)?;
+  let show_item = MenuItem::with_id(app, "show", "Open full window", true, None::<&str>)?;
+  let hide_item = MenuItem::with_id(app, "hide", "Hide panel", true, None::<&str>)?;
   let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-  let menu = Menu::with_items(app, &[&show_item, &hide_item, &quit_item])?;
+  let menu = Menu::with_items(app, &[&panel_item, &show_item, &hide_item, &quit_item])?;
   let icon = Image::from_bytes(include_bytes!("../icons/tray.png"))?;
 
   TrayIconBuilder::new()
@@ -64,11 +112,14 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     .icon(icon)
     .tooltip("teleport")
     .on_menu_event(|app, event| match event.id.as_ref() {
+      "panel" => {
+        let _ = show_mini_window_at(app, None);
+      }
       "show" => {
-        let _ = show_main_window(app);
+        let _ = show_full_window(app.clone());
       }
       "hide" => {
-        if let Some(window) = app.get_webview_window("main") {
+        if let Some(window) = app.get_webview_window("mini") {
           let _ = window.hide();
         }
       }
@@ -77,12 +128,13 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     })
     .on_tray_icon_event(|tray, event| {
       if let TrayIconEvent::Click {
+        position,
         button: MouseButton::Left,
         button_state: MouseButtonState::Up,
         ..
       } = event
       {
-        let _ = show_main_window(&tray.app_handle());
+        let _ = show_mini_window_at(&tray.app_handle(), Some((position.x, position.y)));
       }
     })
     .build(app)?;
@@ -98,6 +150,10 @@ fn main() {
     .plugin(tauri_plugin_opener::init())
     .invoke_handler(tauri::generate_handler![
       focus_main_window,
+      show_full_window,
+      show_mini_panel,
+      hide_mini_panel,
+      toggle_mini_panel,
       keychain_get,
       keychain_set,
       keychain_delete

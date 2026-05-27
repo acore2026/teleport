@@ -2,8 +2,10 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import CryptoJS from "crypto-js";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { emit, listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { register, unregister } from "@tauri-apps/plugin-global-shortcut";
-import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { isPermissionGranted, onAction, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { Store } from "@tauri-apps/plugin-store";
 import {
   ChevronDown,
@@ -11,6 +13,7 @@ import {
   Clipboard,
   Copy,
   Download,
+  ExternalLink,
   File as FileIcon,
   FileArchive,
   FileAudio,
@@ -25,8 +28,10 @@ import {
   Keyboard,
   Link2,
   LockKeyhole,
+  Maximize2,
   Plus,
   Send,
+  Settings,
   Trash2,
   UploadCloud,
   X,
@@ -91,6 +96,17 @@ type NewItemNotice = {
   detail: string;
 };
 
+type DesktopShortcuts = {
+  toggleMini: string;
+  openFull: string;
+};
+
+type DesktopStateSync = {
+  room?: string;
+  serverUrl?: string;
+  roomPassword?: string;
+};
+
 type CryptoEnvelope = {
   v: 1 | 2;
   cipher: "AES-CBC-HMAC-SHA256";
@@ -106,7 +122,14 @@ const roomKey = "teleport-active-room";
 const recentRoomsKey = "teleport-recent-rooms";
 const roomPasswordsKey = "teleport-room-passwords";
 const serverUrlKey = "teleport-server-url";
+const minifiedModeKey = "teleport-minified-mode";
+const toggleMiniShortcutKey = "teleport-shortcut-toggle-mini";
+const openFullShortcutKey = "teleport-shortcut-open-full";
 const defaultDesktopServerUrl = "http://101.245.78.174:7777";
+const defaultShortcuts: DesktopShortcuts = {
+  toggleMini: "CommandOrControl+Shift+V",
+  openFull: "CommandOrControl+Shift+O",
+};
 const textCacheKeyPrefix = "teleport-text-cache";
 const maxFileBytes = 200 * 1024 * 1024;
 const cryptoIterations = 1000;
@@ -130,6 +153,25 @@ function initialServerUrl() {
   }
 }
 
+function initialMinifiedMode() {
+  if (!isDesktopRuntime()) return false;
+  try {
+    const stored = localStorage.getItem(minifiedModeKey);
+    return stored === null ? true : stored === "true";
+  } catch {
+    return true;
+  }
+}
+
+function initialShortcut(key: string, fallback: string) {
+  if (!isDesktopRuntime()) return fallback;
+  try {
+    return localStorage.getItem(key) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function normalizeServerUrl(value: string) {
   const url = value.trim().replace(/\/+$/, "");
   if (!url) return "";
@@ -137,6 +179,15 @@ function normalizeServerUrl(value: string) {
     throw new Error("Server must start with http:// or https://.");
   }
   return url;
+}
+
+function normalizeShortcut(value: string, fallback: string) {
+  const shortcut = value.trim();
+  if (!shortcut) return fallback;
+  if (!shortcut.includes("+")) {
+    throw new Error("Shortcut must include at least one modifier, for example CommandOrControl+Shift+V.");
+  }
+  return shortcut;
 }
 
 function apiUrl(path: string, serverUrl: string) {
@@ -450,12 +501,31 @@ async function copyText(text: string) {
 
 function App() {
   const desktopMode = React.useMemo(isDesktopRuntime, []);
+  const currentWindowLabel = React.useMemo(() => {
+    if (!desktopMode) return "main";
+    try {
+      return getCurrentWindow().label;
+    } catch {
+      return "main";
+    }
+  }, [desktopMode]);
+  const isMiniWindow = desktopMode && currentWindowLabel === "mini";
   const initialRoomValue = React.useMemo(initialRoom, []);
   const initialServerValue = React.useMemo(initialServerUrl, []);
+  const initialMinifiedValue = React.useMemo(initialMinifiedMode, []);
   const [roomInput, setRoomInput] = React.useState(initialRoomValue);
   const [room, setRoom] = React.useState(initialRoomValue);
   const [serverInput, setServerInput] = React.useState(initialServerValue);
   const [serverUrl, setServerUrl] = React.useState(initialServerValue);
+  const [minifiedMode, setMinifiedMode] = React.useState(initialMinifiedValue);
+  const [toggleMiniShortcut, setToggleMiniShortcut] = React.useState(() =>
+    initialShortcut(toggleMiniShortcutKey, defaultShortcuts.toggleMini),
+  );
+  const [openFullShortcut, setOpenFullShortcut] = React.useState(() =>
+    initialShortcut(openFullShortcutKey, defaultShortcuts.openFull),
+  );
+  const [toggleMiniInput, setToggleMiniInput] = React.useState(toggleMiniShortcut);
+  const [openFullInput, setOpenFullInput] = React.useState(openFullShortcut);
   const [passwordInput, setPasswordInput] = React.useState(() =>
     initialRoomValue && !desktopMode ? passwordForRoom(initialRoomValue) : "",
   );
@@ -471,6 +541,8 @@ function App() {
   const [copiedItemId, setCopiedItemId] = React.useState("");
   const [newItemNotice, setNewItemNotice] = React.useState<NewItemNotice | null>(null);
   const [expandedImage, setExpandedImage] = React.useState<Extract<RoomItem, { type: "file" }> | null>(null);
+  const [isMiniSettingsOpen, setIsMiniSettingsOpen] = React.useState(false);
+  const [settingsMessage, setSettingsMessage] = React.useState("");
   const [cacheVersion, setCacheVersion] = React.useState(0);
   const pasteBoxRef = React.useRef<HTMLDivElement | null>(null);
   const desktopStoreRef = React.useRef<Store | null>(null);
@@ -485,6 +557,23 @@ function App() {
     () => items.map((item) => readableItem(item, room)),
     [items, room, cacheVersion],
   );
+
+  const publishDesktopState = React.useCallback(
+    (next: DesktopStateSync = {}) => {
+      if (!desktopMode) return;
+      emit("teleport-state-sync", {
+        room: next.room ?? room,
+        serverUrl: next.serverUrl ?? serverUrl,
+        roomPassword: next.roomPassword ?? roomPassword,
+      }).catch(() => undefined);
+    },
+    [desktopMode, room, roomPassword, serverUrl],
+  );
+
+  const openFullWindow = React.useCallback(async () => {
+    publishDesktopState();
+    await invoke("show_full_window").catch(() => undefined);
+  }, [publishDesktopState]);
 
   React.useEffect(() => {
     if (!room) return undefined;
@@ -514,18 +603,33 @@ function App() {
         desktopStoreRef.current = store;
         const storedServerUrl = normalizeServerUrl((await store.get<string>(serverUrlKey)) || initialServerValue);
         const storedRoom = (await store.get<string>(roomKey)) || initialRoomValue;
+        const storedMinified = (await store.get<boolean>(minifiedModeKey)) ?? initialMinifiedValue;
+        const storedToggleShortcut =
+          (await store.get<string>(toggleMiniShortcutKey)) ||
+          initialShortcut(toggleMiniShortcutKey, defaultShortcuts.toggleMini);
+        const storedOpenFullShortcut =
+          (await store.get<string>(openFullShortcutKey)) ||
+          initialShortcut(openFullShortcutKey, defaultShortcuts.openFull);
         const nextRoom = storedRoom ? normalizeRoom(storedRoom) : "";
         const nextPassword = nextRoom ? await keychainGet(nextRoom) : "";
 
         if (cancelled) return;
         setServerUrl(storedServerUrl || defaultDesktopServerUrl);
         setServerInput(storedServerUrl || defaultDesktopServerUrl);
+        setMinifiedMode(storedMinified);
+        setToggleMiniShortcut(storedToggleShortcut);
+        setToggleMiniInput(storedToggleShortcut);
+        setOpenFullShortcut(storedOpenFullShortcut);
+        setOpenFullInput(storedOpenFullShortcut);
         if (nextRoom) {
           setRoom(nextRoom);
           setRoomInput(nextRoom);
           setRoomPassword(nextPassword);
           setPasswordInput(nextPassword);
           setIsEditingRoom(false);
+        }
+        if (isMiniWindow && !storedMinified) {
+          invoke("show_full_window").catch(() => undefined);
         }
       })
       .catch(() => {
@@ -535,31 +639,97 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [desktopMode, initialRoomValue, initialServerValue]);
+  }, [desktopMode, initialMinifiedValue, initialRoomValue, initialServerValue, isMiniWindow]);
 
   React.useEffect(() => {
     if (!desktopMode) return undefined;
 
-    let mounted = true;
-    register("CommandOrControl+Shift+V", async (event) => {
-      if (event.state !== "Pressed") return;
-      try {
-        await invoke("focus_main_window");
-      } catch {
-        // Browser focus still happens below if the window is already visible.
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    listen<DesktopStateSync>("teleport-state-sync", async ({ payload }) => {
+      if (cancelled) return;
+
+      if (payload.serverUrl !== undefined) {
+        setServerUrl(payload.serverUrl);
+        setServerInput(payload.serverUrl);
       }
+
+      if (payload.room !== undefined) {
+        const nextRoom = payload.room ? normalizeRoom(payload.room) : "";
+        const nextPassword = payload.roomPassword ?? (nextRoom ? await keychainGet(nextRoom) : "");
+        if (cancelled) return;
+        setRoom(nextRoom);
+        setRoomInput(nextRoom);
+        setPasswordInput(nextPassword);
+        setRoomPassword(nextPassword);
+        setIsEditingRoom(!nextRoom);
+      }
+    })
+      .then((listener) => {
+        if (cancelled) listener();
+        else unlisten = listener;
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [desktopMode]);
+
+  React.useEffect(() => {
+    if (!desktopMode || !isMiniWindow) return undefined;
+
+    let mounted = true;
+    const shortcuts = [toggleMiniShortcut, openFullShortcut].filter(
+      (shortcut, index, values) => shortcut && values.indexOf(shortcut) === index,
+    );
+    register(shortcuts, async (event) => {
+      if (event.state !== "Pressed") return;
+      if (event.shortcut === openFullShortcut) {
+        await openFullWindow();
+        return;
+      }
+      await invoke("toggle_mini_panel").catch(() => undefined);
       window.setTimeout(() => {
         if (mounted) pasteBoxRef.current?.focus();
       }, 80);
-    }).catch(() => {
-      // The shortcut may already be reserved by the OS or another app.
+    }).catch((caught) => {
+      setSettingsMessage(caught instanceof Error ? caught.message : "Shortcut registration failed.");
     });
 
     return () => {
       mounted = false;
-      unregister("CommandOrControl+Shift+V").catch(() => undefined);
+      if (shortcuts.length) unregister(shortcuts).catch(() => undefined);
     };
-  }, [desktopMode]);
+  }, [desktopMode, isMiniWindow, openFullShortcut, openFullWindow, toggleMiniShortcut]);
+
+  React.useEffect(() => {
+    if (!desktopMode || !isMiniWindow) return undefined;
+
+    let disposed = false;
+    const currentWindow = getCurrentWindow();
+    const unlisteners: Array<() => void> = [];
+    currentWindow.onFocusChanged(({ payload }) => {
+      if (!payload) {
+        window.setTimeout(() => {
+          if (!disposed) invoke("hide_mini_panel").catch(() => undefined);
+        }, 120);
+      }
+    }).then((unlisten) => unlisteners.push(unlisten));
+    onAction(() => {
+      invoke("show_mini_panel").catch(() => undefined);
+    }).then((listener) => {
+      unlisteners.push(() => {
+        listener.unregister().catch(() => undefined);
+      });
+    });
+
+    return () => {
+      disposed = true;
+      for (const unlisten of unlisteners) unlisten();
+    };
+  }, [desktopMode, isMiniWindow]);
 
   React.useEffect(() => {
     const timer = setInterval(() => setItems((current) => [...current]), 30000);
@@ -576,7 +746,7 @@ function App() {
     if (!room) return;
     rememberRoom(room);
     setRecentRooms(readRecentRooms());
-  }, []);
+  }, [room]);
 
   React.useEffect(() => {
     if (!roomPassword) return undefined;
@@ -674,7 +844,7 @@ function App() {
     }
   }
 
-function notifyNewItems(newItems: RoomItem[], nextRoom: string) {
+  function notifyNewItems(newItems: RoomItem[], nextRoom: string) {
     const title = notificationTitleFor(newItems);
     const detail = notificationDetailFor(newItems, nextRoom);
     setNewItemNotice({
@@ -742,6 +912,7 @@ function notifyNewItems(newItems: RoomItem[], nextRoom: string) {
         await desktopStoreRef.current.set(roomKey, nextRoom);
         await desktopStoreRef.current.set(serverUrlKey, nextServerUrl);
       }
+      publishDesktopState({ room: nextRoom, serverUrl: nextServerUrl, roomPassword: nextPassword });
       requestAnimationFrame(() => pasteBoxRef.current?.focus());
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Invalid room name.");
@@ -753,6 +924,69 @@ function notifyNewItems(newItems: RoomItem[], nextRoom: string) {
     const nextPassword = await keychainGet(nextRoom);
     setPasswordInput(nextPassword);
     await enterRoom(nextRoom, nextPassword);
+  }
+
+  async function applyDesktopSettings() {
+    try {
+      const nextServerUrl = normalizeServerUrl(serverInput) || defaultDesktopServerUrl;
+      const nextToggleShortcut = normalizeShortcut(toggleMiniInput, defaultShortcuts.toggleMini);
+      const nextOpenFullShortcut = normalizeShortcut(openFullInput, defaultShortcuts.openFull);
+      if (nextToggleShortcut === nextOpenFullShortcut) {
+        throw new Error("Shortcuts must be different.");
+      }
+
+      setServerUrl(nextServerUrl);
+      setServerInput(nextServerUrl);
+      setToggleMiniShortcut(nextToggleShortcut);
+      setToggleMiniInput(nextToggleShortcut);
+      setOpenFullShortcut(nextOpenFullShortcut);
+      setOpenFullInput(nextOpenFullShortcut);
+      setSettingsMessage("Saved");
+      localStorage.setItem(serverUrlKey, nextServerUrl);
+      localStorage.setItem(minifiedModeKey, String(minifiedMode));
+      localStorage.setItem(toggleMiniShortcutKey, nextToggleShortcut);
+      localStorage.setItem(openFullShortcutKey, nextOpenFullShortcut);
+
+      if (desktopStoreRef.current) {
+        await desktopStoreRef.current.set(serverUrlKey, nextServerUrl);
+        await desktopStoreRef.current.set(minifiedModeKey, minifiedMode);
+        await desktopStoreRef.current.set(toggleMiniShortcutKey, nextToggleShortcut);
+        await desktopStoreRef.current.set(openFullShortcutKey, nextOpenFullShortcut);
+      }
+
+      publishDesktopState({ room, serverUrl: nextServerUrl, roomPassword });
+      if (isMiniWindow && !minifiedMode) {
+        await openFullWindow();
+      }
+    } catch (caught) {
+      setSettingsMessage(caught instanceof Error ? caught.message : "Settings were not saved.");
+    }
+  }
+
+  function handlePaste(event: React.ClipboardEvent<HTMLElement>) {
+    const files = filesFromClipboard(event.clipboardData);
+    if (files.length) {
+      event.preventDefault();
+      uploadFiles(files);
+      return;
+    }
+
+    const text = event.clipboardData.getData("text/plain");
+    if (text.trim()) {
+      event.preventDefault();
+      uploadText(text);
+    }
+  }
+
+  function handleDragOver(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault();
+    setIsDragging(true);
+  }
+
+  function handleDrop(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault();
+    setIsDragging(false);
+    uploadFiles(event.dataTransfer.files);
   }
 
   async function uploadText(content: string) {
@@ -919,6 +1153,173 @@ function notifyNewItems(newItems: RoomItem[], nextRoom: string) {
     window.open(absoluteItemUrl(item.downloadUrl, serverUrl), "_blank", "noopener,noreferrer");
   }
 
+  if (isMiniWindow) {
+    return (
+      <main className="mini-shell">
+        <header className="mini-titlebar">
+          <div className="mini-brand">
+            <span aria-hidden="true">
+              <Zap size={16} fill="currentColor" />
+            </span>
+            <strong>teleport</strong>
+          </div>
+          <div className="mini-actions">
+            {room && <button className="mini-room-chip" onClick={() => setIsEditingRoom(true)}>{room}</button>}
+            <button
+              className="mini-icon-button"
+              onClick={() => setIsMiniSettingsOpen((value) => !value)}
+              aria-label="Settings"
+              title="Settings"
+            >
+              <Settings size={16} />
+            </button>
+            <button
+              className="mini-icon-button"
+              onClick={openFullWindow}
+              aria-label="Full window"
+              title="Full window"
+            >
+              <Maximize2 size={16} />
+            </button>
+          </div>
+        </header>
+
+        {isMiniSettingsOpen && (
+          <section className="mini-settings" aria-label="Client settings">
+            <label className="mini-toggle">
+              <span>
+                <strong>Minified mode</strong>
+                <small>Open this panel on launch</small>
+              </span>
+              <input
+                type="checkbox"
+                checked={minifiedMode}
+                onChange={(event) => setMinifiedMode(event.currentTarget.checked)}
+              />
+            </label>
+            <label>
+              <span>Server address</span>
+              <input value={serverInput} onChange={(event) => setServerInput(event.target.value)} />
+            </label>
+            <label>
+              <span>Toggle panel</span>
+              <input value={toggleMiniInput} onChange={(event) => setToggleMiniInput(event.target.value)} />
+            </label>
+            <label>
+              <span>Full window</span>
+              <input value={openFullInput} onChange={(event) => setOpenFullInput(event.target.value)} />
+            </label>
+            <div className="mini-settings-foot">
+              {settingsMessage && <p>{settingsMessage}</p>}
+              <button type="button" onClick={applyDesktopSettings}>
+                Save
+              </button>
+            </div>
+          </section>
+        )}
+
+        <section className="mini-content">
+          {!room || isEditingRoom ? (
+            <section className="mini-room-card">
+              <h2>{room ? "Switch room" : "Create or join a room"}</h2>
+              <RoomPrompt
+                room={room}
+                roomInput={roomInput}
+                passwordInput={passwordInput}
+                serverInput={serverInput}
+                recentRooms={recentRooms}
+                error={error}
+                autoFocus
+                compact
+                onRoomInput={setRoomInput}
+                onPasswordInput={setPasswordInput}
+                onServerInput={setServerInput}
+                onSubmit={() => enterRoom()}
+                onCancel={room ? () => setIsEditingRoom(false) : undefined}
+                onRecentRoom={enterRecentRoom}
+              />
+            </section>
+          ) : (
+            <>
+              <section
+                ref={pasteBoxRef}
+                tabIndex={0}
+                role="textbox"
+                aria-label="Paste or drop box"
+                className={`mini-paste-box ${isDragging ? "mini-paste-box-dragging" : ""}`}
+                onPaste={handlePaste}
+                onDragOver={handleDragOver}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={handleDrop}
+              >
+                <span>
+                  <UploadCloud size={22} />
+                </span>
+                <div>
+                  <strong>Paste or drop</strong>
+                  <p>Synced to {room}</p>
+                </div>
+              </section>
+
+              {uploadProgress && <UploadPrompt progress={uploadProgress} />}
+              {error && <p className="mini-error">{error}</p>}
+
+              <section className="mini-list-panel">
+                <div className="mini-list-head">
+                  <h2>Recent pastes</h2>
+                  <button onClick={openFullWindow}>
+                    <ExternalLink size={14} />
+                    Open
+                  </button>
+                </div>
+                {visibleItems.length ? (
+                  <ol className="mini-items-list">
+                    {visibleItems.slice(0, 8).map((item) => (
+                      <MiniItemCard
+                        key={item.id}
+                        item={item}
+                        isCopied={copiedItemId === item.id}
+                        onCopy={copyItem}
+                        onDelete={deleteItem}
+                        onDownload={downloadItem}
+                        onPreview={setExpandedImage}
+                        getItemUrl={(itemUrl) => absoluteItemUrl(itemUrl, serverUrl)}
+                      />
+                    ))}
+                  </ol>
+                ) : (
+                  <div className="mini-empty">
+                    <Clipboard size={24} />
+                    <p>Paste text or drop a file.</p>
+                  </div>
+                )}
+              </section>
+            </>
+          )}
+        </section>
+
+        {newItemNotice && (
+          <div className="mini-notice" role="status" aria-live="polite">
+            <strong>{newItemNotice.title}</strong>
+            <p>{newItemNotice.detail}</p>
+          </div>
+        )}
+
+        {expandedImage && (
+          <div className="image-modal image-modal-mini" role="dialog" aria-modal="true" onClick={() => setExpandedImage(null)}>
+            <div className="image-modal-inner" onClick={(event) => event.stopPropagation()}>
+              <button className="image-modal-close" onClick={() => setExpandedImage(null)} aria-label="Close preview">
+                <X size={18} />
+              </button>
+              <img src={absoluteItemUrl(expandedImage.downloadUrl, serverUrl)} alt={expandedImage.fileName} />
+              <p>{expandedImage.fileName}</p>
+            </div>
+          </div>
+        )}
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen">
       <header className="title-bar">
@@ -992,30 +1393,10 @@ function notifyNewItems(newItems: RoomItem[], nextRoom: string) {
               role="textbox"
               aria-label="Paste or drop box"
               className={`paste-box ${isDragging ? "paste-box-dragging" : ""}`}
-              onPaste={(event) => {
-                const files = filesFromClipboard(event.clipboardData);
-                if (files.length) {
-                  event.preventDefault();
-                  uploadFiles(files);
-                  return;
-                }
-
-                const text = event.clipboardData.getData("text/plain");
-                if (text.trim()) {
-                  event.preventDefault();
-                  uploadText(text);
-                }
-              }}
-              onDragOver={(event) => {
-                event.preventDefault();
-                setIsDragging(true);
-              }}
+              onPaste={handlePaste}
+              onDragOver={handleDragOver}
               onDragLeave={() => setIsDragging(false)}
-              onDrop={(event) => {
-                event.preventDefault();
-                setIsDragging(false);
-                uploadFiles(event.dataTransfer.files);
-              }}
+              onDrop={handleDrop}
             >
               <span className="drop-icon">
                 <UploadCloud size={44} strokeWidth={1.75} />
@@ -1369,6 +1750,74 @@ function ItemCard({
         )}
         <button className="danger" onClick={() => onDelete(item)}>
           <Trash2 size={15} />
+        </button>
+      </div>
+    </li>
+  );
+}
+
+function MiniItemCard({
+  item,
+  onCopy,
+  onDelete,
+  onDownload,
+  onPreview,
+  getItemUrl,
+  isCopied,
+}: {
+  item: RoomItem;
+  isCopied: boolean;
+  onCopy: (item: RoomItem) => void;
+  onDelete: (item: RoomItem) => void;
+  onDownload: (item: RoomItem) => void;
+  onPreview: (item: Extract<RoomItem, { type: "file" }>) => void;
+  getItemUrl: (downloadUrl: string) => string;
+}) {
+  const icon = fileIconFor(item);
+  const Icon = icon.Icon;
+  const isImage = isPreviewableImage(item);
+  const title = item.type === "file" ? item.fileName : "Text paste";
+  const meta = item.type === "file" ? `${formatBytes(item.fileSize)} · ${icon.label}` : timeAgo(item.createdAt);
+  const primary = item.type === "file" ? onDownload : onCopy;
+
+  return (
+    <li className={isCopied ? "mini-item mini-item-copied" : "mini-item"}>
+      <button className="mini-item-main" onClick={() => primary(item)}>
+        {isImage && item.type === "file" ? (
+          <span className="mini-thumb" onClick={(event) => {
+            event.stopPropagation();
+            onPreview(item);
+          }}>
+            <img src={getItemUrl(item.downloadUrl)} alt="" loading="lazy" />
+          </span>
+        ) : (
+          <span className={`mini-file-icon item-icon-${icon.tone}`}>
+            <Icon size={17} />
+          </span>
+        )}
+        <span className="mini-item-copy">
+          <strong>{title}</strong>
+          <small>{meta} · {timeLeft(item.expiresAt)}</small>
+          {item.type === "text" && <em>{item.textContent || "Locked text paste"}</em>}
+        </span>
+      </button>
+      <div className="mini-item-actions">
+        {item.type === "file" ? (
+          <>
+            <button onClick={() => onDownload(item)} title="Download" aria-label={`Download ${item.fileName}`}>
+              <Download size={14} />
+            </button>
+            <button onClick={() => onCopy(item)} title="Copy link" aria-label={`Copy link for ${item.fileName}`}>
+              {isCopied ? <Check size={14} /> : <Copy size={14} />}
+            </button>
+          </>
+        ) : (
+          <button onClick={() => onCopy(item)} title="Copy" aria-label="Copy text paste">
+            {isCopied ? <Check size={14} /> : <Copy size={14} />}
+          </button>
+        )}
+        <button className="mini-danger" onClick={() => onDelete(item)} title="Delete" aria-label="Delete item">
+          <Trash2 size={14} />
         </button>
       </div>
     </li>

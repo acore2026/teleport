@@ -62,21 +62,14 @@ jobs:
         include:
           - name: linux
             os: ubuntu-latest
-            command: npm run desktop:bundle:linux
+            command: npm run desktop:standalone:linux
             artifacts: |
-              src-tauri/target/release/bundle/deb/*.deb
-              src-tauri/target/release/bundle/rpm/*.rpm
+              release-artifacts/*.tar.gz
           - name: windows
             os: windows-latest
-            command: npm run desktop:build:windows
+            command: npm run desktop:standalone:windows
             artifacts: |
-              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
-              src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-          - name: macos
-            os: macos-latest
-            command: npm run desktop:build:macos
-            artifacts: |
-              src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+              release-artifacts/*.zip
 
     steps:
       - name: Checkout
@@ -91,10 +84,6 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Add macOS universal targets
-        if: matrix.name == 'macos'
-        run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
-
       - name: Install Linux desktop dependencies
         if: matrix.name == 'linux'
         run: |
@@ -102,14 +91,31 @@ jobs:
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
-            librsvg2-dev \
-            rpm
+            librsvg2-dev
 
       - name: Install dependencies
         run: npm ci
 
       - name: Build client
         run: ${{ matrix.command }}
+
+      - name: Package Linux standalone
+        if: matrix.name == 'linux'
+        run: |
+          mkdir -p release-artifacts
+          cp src-tauri/target/release/teleport-desktop release-artifacts/teleport
+          chmod +x release-artifacts/teleport
+          tar -C release-artifacts -czf release-artifacts/teleport-linux-x64-standalone.tar.gz teleport
+          rm release-artifacts/teleport
+
+      - name: Package Windows standalone
+        if: matrix.name == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-artifacts | Out-Null
+          Copy-Item src-tauri/target/x86_64-pc-windows-msvc/release/teleport-desktop.exe release-artifacts/teleport.exe
+          Compress-Archive -Path release-artifacts/teleport.exe -DestinationPath release-artifacts/teleport-windows-x64-standalone.zip -Force
+          Remove-Item release-artifacts/teleport.exe
 
       - name: Upload client artifact
         uses: actions/upload-artifact@v4
@@ -144,5 +150,9 @@ jobs:
             gh release create "$TAG_NAME" \
               --title "$TAG_NAME" \
               --notes "Docker image: \`$IMAGE\`"
+          gh release view "$TAG_NAME" --json assets --jq '.assets[].name' | \
+            while read -r asset; do
+              [ -n "$asset" ] && gh release delete-asset "$TAG_NAME" "$asset" --yes
+            done
           mapfile -d '' files < <(find release-artifacts -type f -print0)
           gh release upload "$TAG_NAME" "${files[@]}" --clobber

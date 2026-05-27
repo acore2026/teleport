@@ -10,6 +10,8 @@
     "desktop:dev": "tauri dev",
     "desktop:check": "tsc --noEmit && cargo check --manifest-path src-tauri/Cargo.toml",
     "desktop:build": "tauri build --no-bundle",
+    "desktop:standalone:linux": "tauri build --no-bundle",
+    "desktop:standalone:windows": "tauri build --target x86_64-pc-windows-msvc --no-bundle --no-sign",
     "desktop:bundle:linux": "tauri build --bundles deb rpm",
     "desktop:build:macos": "tauri build --target universal-apple-darwin --no-sign",
     "desktop:build:windows": "tauri build --target x86_64-pc-windows-msvc --no-sign"

@@ -137,6 +137,7 @@ const autoCaptureClipboardKey = "teleport-auto-capture-clipboard";
 const autoCopyIncomingKey = "teleport-auto-copy-incoming";
 const clipboardLeaseKey = "teleport-clipboard-capture-lease";
 const clipboardWriteSignatureKey = "teleport-clipboard-write-signature";
+const notificationLeaseKey = "teleport-notification-lease";
 const defaultDesktopServerUrl = "http://101.245.78.174:7777";
 const defaultShortcuts: DesktopShortcuts = {
   toggleMini: "CommandOrControl+Shift+V",
@@ -492,17 +493,39 @@ function isPreviewableImage(item: RoomItem) {
   return item.type === "file" && item.mimeType.startsWith("image/");
 }
 
-function notificationTitleFor(items: RoomItem[]) {
-  if (items.length > 1) return `${items.length} new pastes`;
+function textPreview(value: string) {
+  return value.replace(/\s+/g, " ").trim().slice(0, 90);
+}
+
+function itemNotificationLabel(item: RoomItem, room: string) {
+  if (item.type === "file") {
+    const type = item.mimeType?.split("/")[1] || item.mimeType || "file";
+    return `${item.fileName} (${formatBytes(item.fileSize)}, ${type})`;
+  }
+
+  const text = item.encrypted ? readCachedText(room, item) || "" : item.textContent;
+  const preview = textPreview(text);
+  return preview ? `"${preview}"` : "Encrypted text paste";
+}
+
+function notificationTitleFor(items: RoomItem[], room: string) {
+  if (items.length > 1) return `${items.length} new pastes in ${room}`;
   const item = items[0];
-  return item.type === "file" ? item.fileName : "New text paste";
+  return item.type === "file" ? `New file in ${room}` : `New text in ${room}`;
 }
 
 function notificationDetailFor(items: RoomItem[], room: string) {
-  if (items.length > 1) return `Synced to room ${room}`;
-  const item = items[0];
-  if (item.type === "file") return `${formatBytes(item.fileSize)} · ${item.mimeType || "file"}`;
-  return "Synced to room";
+  if (items.length > 1) {
+    const files = items.filter((item) => item.type === "file").length;
+    const texts = items.length - files;
+    const parts = [
+      texts ? `${texts} text${texts === 1 ? "" : "s"}` : "",
+      files ? `${files} file${files === 1 ? "" : "s"}` : "",
+    ].filter(Boolean);
+    const first = itemNotificationLabel(items[0], room);
+    return `${parts.join(", ")} · Latest: ${first}`;
+  }
+  return itemNotificationLabel(items[0], room);
 }
 
 function clipboardTextSignature(text: string) {
@@ -553,6 +576,23 @@ function wasClipboardWrittenByTeleport(signature: string, currentWindowSignature
     return localStorage.getItem(clipboardWriteSignatureKey) === signature;
   } catch {
     return false;
+  }
+}
+
+function tryClaimNotification(items: RoomItem[], room: string) {
+  const ids = items.map((item) => item.id).sort().join(",");
+  const key = `${room}:${ids}`;
+  const now = Date.now();
+  try {
+    const current = JSON.parse(localStorage.getItem(notificationLeaseKey) || "null") as
+      | { key?: string; expiresAt?: number }
+      | null;
+    if (current?.key === key && Number(current.expiresAt) > now) return false;
+
+    localStorage.setItem(notificationLeaseKey, JSON.stringify({ key, expiresAt: now + 8000 }));
+    return true;
+  } catch {
+    return true;
   }
 }
 
@@ -1077,7 +1117,7 @@ function App() {
   }
 
   function notifyNewItems(newItems: RoomItem[], nextRoom: string) {
-    const title = notificationTitleFor(newItems);
+    const title = notificationTitleFor(newItems, nextRoom);
     const detail = notificationDetailFor(newItems, nextRoom);
     setNewItemNotice({
       id: `${Date.now()}:${newItems.map((item) => item.id).join(",")}`,
@@ -1092,7 +1132,9 @@ function App() {
     }, 4200);
 
     if (desktopMode) {
-      sendDesktopNotification(title, detail, nextRoom);
+      if (tryClaimNotification(newItems, nextRoom)) {
+        sendDesktopNotification(title, detail, nextRoom);
+      }
       return;
     }
 
@@ -1114,7 +1156,7 @@ function App() {
 
       sendNotification({
         title,
-        body: `${detail} · ${nextRoom}`,
+        body: detail,
         group: `teleport:${nextRoom}`,
       });
     } catch {

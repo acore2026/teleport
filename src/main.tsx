@@ -1012,7 +1012,7 @@ function App() {
       unlisteners.push(() => {
         listener.unregister().catch(() => undefined);
       });
-    });
+    }).catch(() => undefined);
 
     return () => {
       disposed = true;

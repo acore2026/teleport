@@ -137,6 +137,7 @@ const copyShortcutKey = "teleport-shortcut-copy";
 const pasteShortcutKey = "teleport-shortcut-paste";
 const autoCaptureClipboardKey = "teleport-auto-capture-clipboard";
 const autoCopyIncomingKey = "teleport-auto-copy-incoming";
+const notificationsEnabledKey = "teleport-notifications-enabled";
 const clipboardLeaseKey = "teleport-clipboard-capture-lease";
 const clipboardWriteSignatureKey = "teleport-clipboard-write-signature";
 const notificationLeaseKey = "teleport-notification-lease";
@@ -690,6 +691,10 @@ function App() {
     () => initialBooleanSetting(autoCopyIncomingKey, false),
     [],
   );
+  const initialNotificationsEnabled = React.useMemo(
+    () => initialBooleanSetting(notificationsEnabledKey, true),
+    [],
+  );
   const [roomInput, setRoomInput] = React.useState(initialRoomValue);
   const [room, setRoom] = React.useState(initialRoomValue);
   const [serverInput, setServerInput] = React.useState(initialServerValue);
@@ -709,6 +714,7 @@ function App() {
   const [pasteInput, setPasteInput] = React.useState(pasteShortcut);
   const [autoCaptureClipboard, setAutoCaptureClipboard] = React.useState(initialAutoCaptureClipboard);
   const [autoCopyIncoming, setAutoCopyIncoming] = React.useState(initialAutoCopyIncoming);
+  const [notificationsEnabled, setNotificationsEnabled] = React.useState(initialNotificationsEnabled);
   const [passwordInput, setPasswordInput] = React.useState(() =>
     initialRoomValue && !desktopMode ? passwordForRoom(initialRoomValue) : "",
   );
@@ -806,6 +812,8 @@ function App() {
           (await store.get<boolean>(autoCaptureClipboardKey)) ?? initialAutoCaptureClipboard;
         const storedAutoCopy =
           (await store.get<boolean>(autoCopyIncomingKey)) ?? initialAutoCopyIncoming;
+        const storedNotifications =
+          (await store.get<boolean>(notificationsEnabledKey)) ?? initialNotificationsEnabled;
         const nextRoom = storedRoom ? normalizeRoom(storedRoom) : "";
         const nextPassword = nextRoom ? await keychainGet(nextRoom) : "";
 
@@ -821,6 +829,7 @@ function App() {
         setPasteInput(storedPasteShortcut);
         setAutoCaptureClipboard(storedAutoCapture);
         setAutoCopyIncoming(storedAutoCopy);
+        setNotificationsEnabled(storedNotifications);
         if (nextRoom) {
           setRoom(nextRoom);
           setRoomInput(nextRoom);
@@ -844,6 +853,7 @@ function App() {
     initialAutoCaptureClipboard,
     initialAutoCopyIncoming,
     initialMinifiedValue,
+    initialNotificationsEnabled,
     initialRoomValue,
     initialServerValue,
     isMiniWindow,
@@ -975,6 +985,15 @@ function App() {
       if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
     };
   }, []);
+
+  React.useEffect(() => {
+    if (notificationsEnabled) return;
+    if (noticeTimerRef.current) {
+      window.clearTimeout(noticeTimerRef.current);
+      noticeTimerRef.current = null;
+    }
+    setNewItemNotice(null);
+  }, [notificationsEnabled]);
 
   React.useEffect(() => {
     if (!room) return;
@@ -1115,6 +1134,8 @@ function App() {
   }
 
   function notifyNewItems(newItems: RoomItem[], nextRoom: string) {
+    if (!notificationsEnabled) return;
+
     const title = notificationTitleFor(newItems, nextRoom);
     const detail = notificationDetailFor(newItems, nextRoom);
     setNewItemNotice({
@@ -1275,6 +1296,7 @@ function App() {
       localStorage.setItem(pasteShortcutKey, nextPasteShortcut);
       localStorage.setItem(autoCaptureClipboardKey, String(autoCaptureClipboard));
       localStorage.setItem(autoCopyIncomingKey, String(autoCopyIncoming));
+      localStorage.setItem(notificationsEnabledKey, String(notificationsEnabled));
 
       if (desktopStoreRef.current) {
         await desktopStoreRef.current.set(serverUrlKey, nextServerUrl);
@@ -1284,6 +1306,7 @@ function App() {
         await desktopStoreRef.current.set(pasteShortcutKey, nextPasteShortcut);
         await desktopStoreRef.current.set(autoCaptureClipboardKey, autoCaptureClipboard);
         await desktopStoreRef.current.set(autoCopyIncomingKey, autoCopyIncoming);
+        await desktopStoreRef.current.set(notificationsEnabledKey, notificationsEnabled);
       }
 
       publishDesktopState({ room, serverUrl: nextServerUrl, roomPassword });
@@ -1583,6 +1606,17 @@ function App() {
                     type="checkbox"
                     checked={autoCopyIncoming}
                     onChange={(event) => setAutoCopyIncoming(event.currentTarget.checked)}
+                  />
+                </label>
+                <label className="mini-toggle">
+                  <span>
+                    <strong>Notifications</strong>
+                    <small>Show new paste alerts</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={notificationsEnabled}
+                    onChange={(event) => setNotificationsEnabled(event.currentTarget.checked)}
                   />
                 </label>
                 <label>

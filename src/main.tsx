@@ -860,6 +860,9 @@ function App() {
   const syntheticShortcutRef = React.useRef(false);
   const lastClipboardCaptureSignatureRef = React.useRef("");
   const lastClipboardWriteSignatureRef = React.useRef("");
+  const autoCopyIncomingRef = React.useRef(autoCopyIncoming);
+  const roomPasswordRef = React.useRef(roomPassword);
+  const serverUrlRef = React.useRef(serverUrl);
   const feedStateRef = React.useRef<{
     key: string;
     startedAt: number;
@@ -883,6 +886,18 @@ function App() {
     },
     [desktopMode, room, roomPassword, serverUrl],
   );
+
+  React.useEffect(() => {
+    autoCopyIncomingRef.current = autoCopyIncoming;
+  }, [autoCopyIncoming]);
+
+  React.useEffect(() => {
+    roomPasswordRef.current = roomPassword;
+  }, [roomPassword]);
+
+  React.useEffect(() => {
+    serverUrlRef.current = serverUrl;
+  }, [serverUrl]);
 
   const openFullWindow = React.useCallback(async () => {
     publishDesktopState();
@@ -1253,7 +1268,7 @@ function App() {
   }
 
   async function copyIncomingItems(newItems: RoomItem[], nextRoom: string) {
-    if (!desktopMode || !autoCopyIncoming) return;
+    if (!desktopMode || !autoCopyIncomingRef.current) return;
     const item = newItems.find(
       (candidate) => candidate.type === "text" || (candidate.type === "file" && candidate.mimeType.startsWith("image/")),
     );
@@ -1263,8 +1278,8 @@ function App() {
       let text = item.textContent;
       if (item.encrypted && item.cryptoMeta) {
         text = readCachedText(nextRoom, item) || "";
-        if (!text && roomPassword) {
-          text = openText(item.cryptoMeta, item.textContent, nextRoom, roomPassword);
+        if (!text && roomPasswordRef.current) {
+          text = openText(item.cryptoMeta, item.textContent, nextRoom, roomPasswordRef.current);
           rememberText(nextRoom, item, text);
           setCacheVersion((value) => value + 1);
         }
@@ -1276,7 +1291,7 @@ function App() {
       return;
     }
 
-    const response = await fetch(absoluteItemUrl(item.downloadUrl, serverUrl));
+    const response = await fetch(absoluteItemUrl(item.downloadUrl, serverUrlRef.current));
     if (!response.ok) return;
     const bytes = await blobToPngBytes(await response.blob());
     const image = await Image.fromBytes(bytes);

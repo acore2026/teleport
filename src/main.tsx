@@ -1054,16 +1054,18 @@ function App() {
       (shortcut, index, values) => shortcut && values.indexOf(shortcut) === index,
     );
     register(shortcuts, async (event) => {
-      if (event.state !== "Pressed") return;
       if (syntheticShortcutRef.current) return;
       if (shortcutsMatch(event.shortcut, copyShortcut)) {
+        if (event.state !== "Released") return;
         await sendSelectedItem();
         return;
       }
       if (shortcutsMatch(event.shortcut, pasteShortcut)) {
+        if (event.state !== "Released") return;
         await pasteFirstItem();
         return;
       }
+      if (event.state !== "Pressed") return;
       if (!shortcutsMatch(event.shortcut, openPanelShortcut)) return;
       await invoke("show_mini_panel").catch(() => undefined);
       window.setTimeout(() => {

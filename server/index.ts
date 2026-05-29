@@ -7,7 +7,7 @@ import express from "express";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import multer from "multer";
 
-type HttpError = Error & { status?: number };
+type HttpError = Error & { status?: number; type?: string };
 
 type RoomItemRow = {
   id: string;
@@ -35,6 +35,7 @@ type RoomPayload = {
   room: string;
   items: Array<Record<string, unknown>>;
   ttlMs: number;
+  maxTextBytes: number;
   maxFileBytes: number;
 };
 
@@ -49,7 +50,7 @@ const dbPath = join(dataDir, "pasteroom.sqlite");
 const host = process.env.HOST || "0.0.0.0";
 const port = Number(process.env.PORT || 7777);
 const ttlMs = 24 * 60 * 60 * 1000;
-const maxTextBytes = 1024 * 1024;
+const maxTextBytes = Number(process.env.MAX_TEXT_BYTES || 10 * 1024 * 1024);
 const maxFileBytes = 200 * 1024 * 1024;
 const cleanupIntervalMs = 60 * 1000;
 
@@ -228,7 +229,7 @@ function listItems(room: string) {
 }
 
 function payloadFor(room: string): RoomPayload {
-  return { room, items: listItems(room), ttlMs, maxFileBytes };
+  return { room, items: listItems(room), ttlMs, maxTextBytes, maxFileBytes };
 }
 
 function sendEvent(res: Response, event: string, payload: RoomPayload) {
@@ -284,10 +285,10 @@ app.use("/api", (req, res, next) => {
   }
   next();
 });
-app.use(express.json({ limit: maxTextBytes * 3 }));
+app.use(express.json({ limit: maxTextBytes * 4 }));
 
 app.get("/api/health", (req, res) => {
-  res.json({ ok: true, name: "teleport", ttlMs, maxFileBytes });
+  res.json({ ok: true, name: "teleport", ttlMs, maxTextBytes, maxFileBytes });
 });
 
 app.get("/api/rooms/:room/items", (req, res) => {
@@ -439,6 +440,13 @@ app.use((error: HttpError, req: Request, res: Response, next: NextFunction) => {
 
   if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
     res.status(413).json({ error: "File is too large. Maximum size is 200 MB." });
+    return;
+  }
+
+  if (error.type === "entity.too.large" || error.type === "entity.parse.failed") {
+    res.status(error.status || 400).json({
+      error: error.type === "entity.too.large" ? "Text content is too large." : "Invalid request body."
+    });
     return;
   }
 

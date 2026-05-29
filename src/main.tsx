@@ -81,6 +81,7 @@ type RoomPayload = {
   room: string;
   items: RoomItem[];
   ttlMs: number;
+  maxTextBytes: number;
   maxFileBytes: number;
 };
 
@@ -149,6 +150,7 @@ const clipboardWriteSignatureKey = "teleport-clipboard-write-signature";
 const notificationLeaseKey = "teleport-notification-lease";
 const defaultDesktopServerUrl = "http://101.245.78.174:7777";
 const textCacheKeyPrefix = "teleport-text-cache";
+const maxTextBytes = 10 * 1024 * 1024;
 const maxFileBytes = 200 * 1024 * 1024;
 const cryptoIterations = 1000;
 const keyCache = new Map<string, { encKey: CryptoJS.lib.WordArray; macKey: CryptoJS.lib.WordArray }>();
@@ -775,6 +777,23 @@ async function copyText(text: string) {
   document.execCommand("copy");
   shim.remove();
   rememberClipboardWriteSignature(clipboardTextSignature(text));
+}
+
+async function readJsonPayload(response: Response): Promise<RoomPayload | { error: string }> {
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    return (await response.json()) as RoomPayload | { error: string };
+  }
+
+  const text = await response.text().catch(() => "");
+  const detail = text.replace(/\s+/g, " ").trim();
+  return {
+    error: response.ok
+      ? "Server response was not JSON."
+      : detail
+        ? `Request failed with ${response.status}: ${detail.slice(0, 140)}`
+        : `Request failed with ${response.status}.`,
+  };
 }
 
 function wait(ms: number) {
@@ -1587,7 +1606,9 @@ function App() {
     const text = event.clipboardData.getData("text/plain");
     if (text.trim()) {
       event.preventDefault();
-      uploadText(text);
+      uploadText(text).catch((caught) => {
+        setError(caught instanceof Error ? caught.message : "Text sync failed.");
+      });
     }
   }
 
@@ -1610,40 +1631,49 @@ function App() {
       setIsEditingRoom(true);
       return;
     }
+    if (new Blob([text]).size > maxTextBytes) {
+      setError(`Text is larger than ${formatBytes(maxTextBytes)}.`);
+      return;
+    }
 
     setError("");
     await new Promise((resolve) => {
       window.setTimeout(resolve, 0);
     });
-    const sealed = roomPassword ? sealText(text, room, roomPassword) : null;
-    const response = await fetch(apiUrl(`/api/rooms/${encodeURIComponent(room)}/items`, serverUrl), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(
-        sealed
-          ? { content: sealed.data, encrypted: true, cryptoMeta: stripData(sealed) }
-          : { content: text },
-      ),
-    });
-    const payload = (await response.json()) as RoomPayload | { error: string };
-    if (!response.ok) {
-      setError("error" in payload ? payload.error : "Text sync failed.");
-      return;
-    }
-
-    const nextItems = (payload as RoomPayload).items;
-    if (sealed) {
-      const saved = nextItems.find(
-        (item): item is Extract<RoomItem, { type: "text" }> =>
-          item.type === "text" && Boolean(item.encrypted) && item.textContent === sealed.data,
-      );
-      if (saved) {
-        rememberText(room, saved, text);
-        setCacheVersion((value) => value + 1);
+    let sealed: CryptoEnvelope | null = null;
+    try {
+      sealed = roomPassword ? sealText(text, room, roomPassword) : null;
+      const response = await fetch(apiUrl(`/api/rooms/${encodeURIComponent(room)}/items`, serverUrl), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          sealed
+            ? { content: sealed.data, encrypted: true, cryptoMeta: stripData(sealed) }
+            : { content: text },
+        ),
+      });
+      const payload = await readJsonPayload(response);
+      if (!response.ok || "error" in payload) {
+        setError("error" in payload ? payload.error : "Text sync failed.");
+        return;
       }
-    }
 
-    syncRoomItems(nextItems, room, false);
+      const nextItems = payload.items;
+      if (sealed) {
+        const saved = nextItems.find(
+          (item): item is Extract<RoomItem, { type: "text" }> =>
+            item.type === "text" && Boolean(item.encrypted) && item.textContent === sealed?.data,
+        );
+        if (saved) {
+          rememberText(room, saved, text);
+          setCacheVersion((value) => value + 1);
+        }
+      }
+
+      syncRoomItems(nextItems, room, false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Text sync failed.");
+    }
   }
 
   function uploadFile(file: File, index: number, totalFiles: number) {

@@ -14,6 +14,7 @@ type RoomItemRow = {
   room: string;
   type: "text" | "file";
   textContent: string | null;
+  textEncoding: string | null;
   fileName: string | null;
   mimeType: string | null;
   fileSize: number | null;
@@ -73,7 +74,8 @@ db.exec(`
     expires_at INTEGER NOT NULL,
     hash TEXT NOT NULL,
     encrypted INTEGER NOT NULL DEFAULT 0,
-    crypto_meta TEXT
+    crypto_meta TEXT,
+    text_encoding TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_room_items_room_expires ON room_items(room, expires_at);
 `);
@@ -87,13 +89,16 @@ if (!columns.has("encrypted")) {
 if (!columns.has("crypto_meta")) {
   db.exec("ALTER TABLE room_items ADD COLUMN crypto_meta TEXT");
 }
+if (!columns.has("text_encoding")) {
+  db.exec("ALTER TABLE room_items ADD COLUMN text_encoding TEXT");
+}
 
 const insertItem = db.prepare(`
   INSERT INTO room_items (
     id, room, type, text_content, file_name, mime_type, file_size, file_path,
-    created_at, expires_at, hash, encrypted, crypto_meta
+    created_at, expires_at, hash, encrypted, crypto_meta, text_encoding
   )
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 const selectItems = db.prepare(`
   SELECT
@@ -101,6 +106,7 @@ const selectItems = db.prepare(`
     room,
     type,
     text_content AS textContent,
+    text_encoding AS textEncoding,
     file_name AS fileName,
     mime_type AS mimeType,
     file_size AS fileSize,
@@ -120,6 +126,7 @@ const selectItem = db.prepare(`
     room,
     type,
     text_content AS textContent,
+    text_encoding AS textEncoding,
     file_name AS fileName,
     mime_type AS mimeType,
     file_size AS fileSize,
@@ -219,6 +226,7 @@ function serializeItem(row: RoomItemRow): Record<string, unknown> {
   return {
     ...base,
     textContent: row.textContent || "",
+    textEncoding: row.textEncoding || null,
     bytes: Buffer.byteLength(row.textContent || "")
   };
 }
@@ -349,6 +357,7 @@ app.post(
         now + ttlMs,
         hash,
         0,
+        null,
         null
       );
 
@@ -359,7 +368,12 @@ app.post(
 
     const encrypted = req.body.encrypted === true;
     const cryptoMeta = encrypted ? JSON.stringify(req.body.cryptoMeta || null) : null;
+    const textEncoding = encrypted ? null : String(req.body.textEncoding || "");
     const textContent = encrypted ? String(req.body.content || "") : String(req.body.content || "").trimEnd();
+    if (textEncoding && textEncoding !== "gzip-base64") {
+      res.status(400).json({ error: "Unsupported text encoding." });
+      return;
+    }
     if (!textContent.trim() || (encrypted && !cryptoMeta)) {
       res.status(400).json({ error: "Text content is empty." });
       return;
@@ -383,7 +397,8 @@ app.post(
       now + ttlMs,
       hashBuffer(textContent),
       encrypted ? 1 : 0,
-      cryptoMeta
+      cryptoMeta,
+      textEncoding || null
     );
 
     broadcast(room, "items");

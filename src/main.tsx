@@ -55,6 +55,7 @@ type RoomItem =
       room: string;
       type: "text";
       textContent: string;
+      textEncoding?: "gzip-base64" | null;
       bytes: number;
       createdAt: number;
       expiresAt: number;
@@ -132,6 +133,7 @@ type CryptoEnvelope = {
   iv: string;
   mac: string;
   data?: string;
+  compression?: "gzip";
 };
 
 const roomKey = "teleport-active-room";
@@ -152,6 +154,7 @@ const defaultDesktopServerUrl = "http://101.245.78.174:7777";
 const textCacheKeyPrefix = "teleport-text-cache";
 const maxTextBytes = 10 * 1024 * 1024;
 const maxFileBytes = 200 * 1024 * 1024;
+const textCompressionThresholdBytes = 16 * 1024;
 const cryptoIterations = 1000;
 const keyCache = new Map<string, { encKey: CryptoJS.lib.WordArray; macKey: CryptoJS.lib.WordArray }>();
 const desktopSettingsFile = "settings.json";
@@ -531,7 +534,72 @@ function stripData(envelope: CryptoEnvelope): CryptoEnvelope {
   return rest;
 }
 
-function sealWordArray(payload: CryptoJS.lib.WordArray, room: string, password: string): CryptoEnvelope {
+function wordArrayFromBytes(bytes: Uint8Array) {
+  const words: number[] = [];
+  for (let index = 0; index < bytes.length; index += 1) {
+    words[index >>> 2] |= bytes[index] << (24 - (index % 4) * 8);
+  }
+  return CryptoJS.lib.WordArray.create(words, bytes.length);
+}
+
+function bytesFromWordArray(wordArray: CryptoJS.lib.WordArray) {
+  const bytes = new Uint8Array(wordArray.sigBytes);
+  for (let index = 0; index < wordArray.sigBytes; index += 1) {
+    bytes[index] = (wordArray.words[index >>> 2] >>> (24 - (index % 4) * 8)) & 0xff;
+  }
+  return bytes;
+}
+
+function base64FromBytes(bytes: Uint8Array) {
+  return CryptoJS.enc.Base64.stringify(wordArrayFromBytes(bytes));
+}
+
+function bytesFromBase64(value: string) {
+  return bytesFromWordArray(CryptoJS.enc.Base64.parse(value));
+}
+
+async function streamToBytes(stream: ReadableStream<Uint8Array>) {
+  const response = new Response(stream);
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+async function gzipBytes(bytes: Uint8Array) {
+  if (!("CompressionStream" in window)) return null;
+  const stream = new Blob([bytes.slice()]).stream().pipeThrough(new CompressionStream("gzip"));
+  return streamToBytes(stream);
+}
+
+async function gunzipBytes(bytes: Uint8Array) {
+  if (!("DecompressionStream" in window)) throw new Error("Compressed text is not supported in this browser.");
+  const stream = new Blob([bytes.slice()]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return streamToBytes(stream);
+}
+
+async function maybeCompressText(text: string) {
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length < textCompressionThresholdBytes) {
+    return { bytes, compressed: false };
+  }
+
+  const compressed = await gzipBytes(bytes).catch(() => null);
+  if (!compressed || compressed.length >= bytes.length * 0.95) {
+    return { bytes, compressed: false };
+  }
+
+  return { bytes: compressed, compressed: true };
+}
+
+async function openCompressedText(data: string) {
+  const bytes = await gunzipBytes(bytesFromBase64(data));
+  return new TextDecoder().decode(bytes);
+}
+
+function sealWordArray(
+  payload: CryptoJS.lib.WordArray,
+  room: string,
+  password: string,
+  options: { compression?: "gzip" } = {},
+): CryptoEnvelope {
   const salt = roomSalt(room);
   const iv = CryptoJS.lib.WordArray.random(16).toString(CryptoJS.enc.Base64);
   const keys = deriveKeys(room, password, salt, cryptoIterations);
@@ -551,6 +619,7 @@ function sealWordArray(payload: CryptoJS.lib.WordArray, room: string, password: 
     iv,
     mac,
     data,
+    compression: options.compression,
   };
 }
 
@@ -577,8 +646,33 @@ function openText(envelope: CryptoEnvelope, data: string, room: string, password
   return CryptoJS.enc.Utf8.stringify(openWordArray(envelope, data, room, password));
 }
 
+async function sealPreparedText(prepared: { bytes: Uint8Array; compressed: boolean }, room: string, password: string) {
+  return sealWordArray(wordArrayFromBytes(prepared.bytes), room, password, {
+    compression: prepared.compressed ? "gzip" : undefined,
+  });
+}
+
+async function openSealedText(envelope: CryptoEnvelope, data: string, room: string, password: string) {
+  const opened = openWordArray(envelope, data, room, password);
+  if (envelope.compression === "gzip") {
+    return new TextDecoder().decode(await gunzipBytes(bytesFromWordArray(opened)));
+  }
+  return CryptoJS.enc.Utf8.stringify(opened);
+}
+
+async function openTextItem(item: Extract<RoomItem, { type: "text" }>, room: string, password: string) {
+  if (item.encrypted && item.cryptoMeta) {
+    return openSealedText(item.cryptoMeta, item.textContent, room, password);
+  }
+  if (item.textEncoding === "gzip-base64") {
+    return openCompressedText(item.textContent);
+  }
+  return item.textContent;
+}
+
 function readableItem(item: RoomItem, room: string): RoomItem {
-  if (!item.encrypted || item.type !== "text") return item;
+  if (item.type !== "text") return item;
+  if (!item.encrypted && !item.textEncoding) return item;
 
   const cached = readCachedText(room, item);
   if (cached !== null) {
@@ -1200,11 +1294,11 @@ function App() {
   }, [room, roomPassword]);
 
   React.useEffect(() => {
-    if (!roomPassword) return undefined;
-
     const pending = items.filter(
       (item): item is Extract<RoomItem, { type: "text" }> =>
-        item.type === "text" && Boolean(item.encrypted && item.cryptoMeta) && readCachedText(room, item) === null,
+        item.type === "text" &&
+        Boolean((item.encrypted && item.cryptoMeta && roomPassword) || item.textEncoding) &&
+        readCachedText(room, item) === null,
     );
     if (!pending.length) return undefined;
 
@@ -1219,14 +1313,16 @@ function App() {
       if (!item) return;
 
       timer = window.setTimeout(() => {
-        try {
-          const text = openText(item.cryptoMeta as CryptoEnvelope, item.textContent, room, roomPassword);
-          rememberText(room, item, text);
-          setCacheVersion((value) => value + 1);
-        } catch {
-          // Leave the item blank when the local password does not match.
-        }
-        decryptNext();
+        void (async () => {
+          try {
+            const text = await openTextItem(item, room, roomPassword);
+            rememberText(room, item, text);
+            setCacheVersion((value) => value + 1);
+          } catch {
+            // Leave the item blank when the local password does not match.
+          }
+          decryptNext();
+        })();
       }, 20);
     };
 
@@ -1296,11 +1392,10 @@ function App() {
     if (!item) return;
 
     if (item.type === "text") {
-      let text = item.textContent;
-      if (item.encrypted && item.cryptoMeta) {
-        text = readCachedText(nextRoom, item) || "";
-        if (!text && roomPasswordRef.current) {
-          text = openText(item.cryptoMeta, item.textContent, nextRoom, roomPasswordRef.current);
+      let text = readCachedText(nextRoom, item) || "";
+      if (!text) {
+        text = await openTextItem(item, nextRoom, roomPasswordRef.current);
+        if (item.encrypted || item.textEncoding) {
           rememberText(nextRoom, item, text);
           setCacheVersion((value) => value + 1);
         }
@@ -1641,15 +1736,23 @@ function App() {
       window.setTimeout(resolve, 0);
     });
     let sealed: CryptoEnvelope | null = null;
+    let uploadContent = text;
+    let textEncoding: "gzip-base64" | null = null;
     try {
-      sealed = roomPassword ? sealText(text, room, roomPassword) : null;
+      const prepared = await maybeCompressText(text);
+      if (roomPassword) {
+        sealed = await sealPreparedText(prepared, room, roomPassword);
+      } else if (prepared.compressed) {
+        uploadContent = base64FromBytes(prepared.bytes);
+        textEncoding = "gzip-base64";
+      }
       const response = await fetch(apiUrl(`/api/rooms/${encodeURIComponent(room)}/items`, serverUrl), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(
           sealed
             ? { content: sealed.data, encrypted: true, cryptoMeta: stripData(sealed) }
-            : { content: text },
+            : { content: uploadContent, textEncoding },
         ),
       });
       const payload = await readJsonPayload(response);
@@ -1663,6 +1766,15 @@ function App() {
         const saved = nextItems.find(
           (item): item is Extract<RoomItem, { type: "text" }> =>
             item.type === "text" && Boolean(item.encrypted) && item.textContent === sealed?.data,
+        );
+        if (saved) {
+          rememberText(room, saved, text);
+          setCacheVersion((value) => value + 1);
+        }
+      } else if (textEncoding) {
+        const saved = nextItems.find(
+          (item): item is Extract<RoomItem, { type: "text" }> =>
+            item.type === "text" && item.textEncoding === textEncoding && item.textContent === uploadContent,
         );
         if (saved) {
           rememberText(room, saved, text);

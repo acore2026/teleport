@@ -704,6 +704,97 @@ button {
   font-size: 0.8rem;
 }
 
+.proxy-prompt {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 0.55rem;
+  border: 1px solid #fde68a;
+  border-radius: 0.75rem;
+  background: #fffbeb;
+  padding: 0.65rem;
+  color: #0f172a;
+  box-shadow: 0 12px 30px rgba(120, 53, 15, 0.08);
+}
+
+.proxy-prompt-icon {
+  display: inline-flex;
+  width: 1.9rem;
+  height: 1.9rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.55rem;
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.proxy-prompt strong,
+.proxy-prompt p {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proxy-prompt strong {
+  font-size: 0.86rem;
+  font-weight: 850;
+}
+
+.proxy-prompt p {
+  margin: 0.08rem 0 0;
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.proxy-prompt button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  border: 1px solid transparent;
+  border-radius: 0.55rem;
+  padding: 0.48rem 0.65rem;
+  background: transparent;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.proxy-prompt-primary {
+  background: #7c3aed !important;
+  color: white;
+}
+
+.proxy-prompt-secondary {
+  border-color: #fde68a !important;
+  background: white !important;
+  color: #78350f;
+}
+
+.proxy-prompt-close {
+  width: 2rem;
+  padding: 0 !important;
+  color: #92400e;
+}
+
+.proxy-prompt-compact {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  padding: 0.58rem;
+}
+
+.proxy-prompt-compact .proxy-prompt-icon {
+  width: 1.65rem;
+  height: 1.65rem;
+}
+
+.proxy-prompt-compact p,
+.proxy-prompt-compact .proxy-prompt-secondary {
+  display: none;
+}
+
 .error-line {
   margin: 0;
   border: 1px solid #fecaca;

@@ -96,6 +96,11 @@ type UploadProgress = {
   processing: boolean;
 };
 
+type ProxyChallenge = {
+  url: string;
+  detectedAt: number;
+};
+
 type ClipboardSnapshot =
   | { type: "text"; text: string; signature: string }
   | { type: "image"; image: Image; signature: string }
@@ -155,6 +160,7 @@ const textCacheKeyPrefix = "teleport-text-cache";
 const maxTextBytes = 10 * 1024 * 1024;
 const maxFileBytes = 200 * 1024 * 1024;
 const textCompressionThresholdBytes = 16 * 1024;
+const proxyChallengeMessage = "Proxy confirmation required.";
 const cryptoIterations = 1000;
 const keyCache = new Map<string, { encKey: CryptoJS.lib.WordArray; macKey: CryptoJS.lib.WordArray }>();
 const desktopSettingsFile = "settings.json";
@@ -873,6 +879,28 @@ async function copyText(text: string) {
   rememberClipboardWriteSignature(clipboardTextSignature(text));
 }
 
+class ProxyChallengeError extends Error {
+  url: string;
+
+  constructor(url: string) {
+    super(proxyChallengeMessage);
+    this.name = "ProxyChallengeError";
+    this.url = url;
+  }
+}
+
+function looksLikeProxyChallenge(text: string) {
+  if (!text) return false;
+  const source = text.toLowerCase();
+  return (
+    source.includes("his proxy notification") ||
+    source.includes("swg,proxy,netentsec") ||
+    source.includes('id="continuebtn"') ||
+    source.includes("接受风险并访问") ||
+    source.includes("proxyaccess/lst")
+  );
+}
+
 async function readJsonPayload(response: Response): Promise<RoomPayload | { error: string }> {
   const contentType = response.headers.get("content-type") || "";
   if (contentType.includes("application/json")) {
@@ -880,6 +908,10 @@ async function readJsonPayload(response: Response): Promise<RoomPayload | { erro
   }
 
   const text = await response.text().catch(() => "");
+  if (looksLikeProxyChallenge(text)) {
+    throw new ProxyChallengeError(response.url);
+  }
+
   const detail = text.replace(/\s+/g, " ").trim();
   return {
     error: response.ok
@@ -962,6 +994,7 @@ function App() {
   const [settingsMessage, setSettingsMessage] = React.useState("");
   const [desktopSettingsReady, setDesktopSettingsReady] = React.useState(!desktopMode);
   const [cacheVersion, setCacheVersion] = React.useState(0);
+  const [proxyChallenge, setProxyChallenge] = React.useState<ProxyChallenge | null>(null);
   const pasteBoxRef = React.useRef<HTMLDivElement | null>(null);
   const desktopStoreRef = React.useRef<Store | null>(null);
   const clipboardOwnerRef = React.useRef(
@@ -973,6 +1006,7 @@ function App() {
   const syntheticShortcutRef = React.useRef(false);
   const lastClipboardCaptureSignatureRef = React.useRef("");
   const lastClipboardWriteSignatureRef = React.useRef("");
+  const proxyOpenRef = React.useRef<{ url: string; at: number } | null>(null);
   const autoCopyIncomingRef = React.useRef(autoCopyIncoming);
   const roomPasswordRef = React.useRef(roomPassword);
   const serverUrlRef = React.useRef(serverUrl);
@@ -1022,13 +1056,19 @@ function App() {
 
     primeRoomFeed(room);
     loadRoom(room).catch((caught) => {
-      setError(caught instanceof Error ? caught.message : "Unable to load room.");
+      setError(handleSyncError(caught, "Unable to load room."));
     });
     const events = new EventSource(apiUrl(`/api/rooms/${encodeURIComponent(room)}/events`, serverUrl));
     events.addEventListener("items", (event) => {
       const payload = JSON.parse(event.data) as RoomPayload;
       syncRoomItems(payload.items, room, true);
     });
+    events.onerror = () => {
+      probeRoomConnection(room).catch((caught) => {
+        const message = handleSyncError(caught, "Connection interrupted.");
+        if (message !== proxyChallengeMessage) setError(message);
+      });
+    };
 
     return () => {
       events.close();
@@ -1335,9 +1375,17 @@ function App() {
 
   async function loadRoom(nextRoom: string) {
     const response = await fetch(apiUrl(`/api/rooms/${encodeURIComponent(nextRoom)}/items`, serverUrl));
-    const payload = (await response.json()) as RoomPayload | { error: string };
+    const payload = await readJsonPayload(response);
     if (!response.ok) throw new Error("error" in payload ? payload.error : "Unable to load room.");
     syncRoomItems((payload as RoomPayload).items, nextRoom, false);
+  }
+
+  async function probeRoomConnection(nextRoom: string) {
+    const response = await fetch(apiUrl(`/api/rooms/${encodeURIComponent(nextRoom)}/items`, serverUrl), {
+      cache: "no-store",
+    });
+    const payload = await readJsonPayload(response);
+    if (!response.ok) throw new Error("error" in payload ? payload.error : "Unable to load room.");
   }
 
   function feedKeyFor(nextRoom: string) {
@@ -1448,6 +1496,52 @@ function App() {
         tag: `teleport:${nextRoom}`,
       });
     }
+  }
+
+  function challengeUrl(candidateUrl?: string) {
+    const candidate = candidateUrl?.trim();
+    if (candidate && /^https?:\/\//i.test(candidate)) return candidate;
+    if (serverUrl) return serverUrl;
+    return window.location.href;
+  }
+
+  function openProxyChallenge(url: string, force = false) {
+    const lastOpen = proxyOpenRef.current;
+    if (!force && lastOpen?.url === url && Date.now() - lastOpen.at < 8000) return;
+    proxyOpenRef.current = { url, at: Date.now() };
+
+    if (desktopMode) {
+      invoke("open_proxy_confirmation", { url }).catch(() => {
+        window.open(url, "_blank", "noopener,noreferrer");
+      });
+      return;
+    }
+
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  function registerProxyChallenge(caught: ProxyChallengeError) {
+    const url = challengeUrl(caught.url);
+    setProxyChallenge((current) => (current?.url === url ? current : { url, detectedAt: Date.now() }));
+    if (desktopMode) openProxyChallenge(url);
+  }
+
+  function handleSyncError(caught: unknown, fallback: string) {
+    if (caught instanceof ProxyChallengeError) {
+      registerProxyChallenge(caught);
+      return proxyChallengeMessage;
+    }
+    return caught instanceof Error ? caught.message : fallback;
+  }
+
+  function retryProxyConnection() {
+    setProxyChallenge(null);
+    setError("");
+    if (!room) return;
+    primeRoomFeed(room);
+    loadRoom(room).catch((caught) => {
+      setError(handleSyncError(caught, "Unable to load room."));
+    });
   }
 
   async function sendDesktopNotification(title: string, detail: string, nextRoom: string) {
@@ -1702,7 +1796,7 @@ function App() {
     if (text.trim()) {
       event.preventDefault();
       uploadText(text).catch((caught) => {
-        setError(caught instanceof Error ? caught.message : "Text sync failed.");
+        setError(handleSyncError(caught, "Text sync failed."));
       });
     }
   }
@@ -1784,13 +1878,14 @@ function App() {
 
       syncRoomItems(nextItems, room, false);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Text sync failed.");
+      setError(handleSyncError(caught, "Text sync failed."));
     }
   }
 
   function uploadFile(file: File, index: number, totalFiles: number) {
     return new Promise<RoomPayload>((resolve, reject) => {
       const request = new XMLHttpRequest();
+      const uploadUrl = apiUrl(`/api/rooms/${encodeURIComponent(room)}/items`, serverUrl);
       const form = new FormData();
       form.append("file", file);
 
@@ -1823,6 +1918,10 @@ function App() {
         try {
           payload = JSON.parse(request.responseText || "{}");
         } catch {
+          if (looksLikeProxyChallenge(request.responseText || "")) {
+            reject(new ProxyChallengeError(request.responseURL || uploadUrl));
+            return;
+          }
           reject(new Error("Upload response was invalid."));
           return;
         }
@@ -1845,7 +1944,7 @@ function App() {
       };
 
       request.onerror = () => reject(new Error(`Upload failed for ${file.name}.`));
-      request.open("POST", apiUrl(`/api/rooms/${encodeURIComponent(room)}/items`, serverUrl));
+      request.open("POST", uploadUrl);
       request.send(form);
     });
   }
@@ -1872,7 +1971,7 @@ function App() {
         const payload = await uploadFile(file, i + 1, batch.length);
         syncRoomItems(payload.items, room, false);
       } catch (caught) {
-        setError(caught instanceof Error ? caught.message : `Upload failed for ${file.name}.`);
+        setError(handleSyncError(caught, `Upload failed for ${file.name}.`));
       }
     }
 
@@ -1880,12 +1979,17 @@ function App() {
   }
 
   async function deleteItem(item: RoomItem) {
-    const response = await fetch(
-      apiUrl(`/api/rooms/${encodeURIComponent(room)}/items/${encodeURIComponent(item.id)}`, serverUrl),
-      { method: "DELETE" },
-    );
-    const payload = (await response.json()) as RoomPayload | { error: string };
-    if (response.ok) syncRoomItems((payload as RoomPayload).items, room, false);
+    try {
+      const response = await fetch(
+        apiUrl(`/api/rooms/${encodeURIComponent(room)}/items/${encodeURIComponent(item.id)}`, serverUrl),
+        { method: "DELETE" },
+      );
+      const payload = await readJsonPayload(response);
+      if (response.ok) syncRoomItems((payload as RoomPayload).items, room, false);
+      else setError("error" in payload ? payload.error : "Delete failed.");
+    } catch (caught) {
+      setError(handleSyncError(caught, "Delete failed."));
+    }
   }
 
   async function copyItem(item: RoomItem) {
@@ -2079,6 +2183,14 @@ function App() {
               </section>
 
               {uploadProgress && <UploadPrompt progress={uploadProgress} />}
+              {proxyChallenge && (
+                <ProxyPrompt
+                  compact
+                  onOpen={() => openProxyChallenge(proxyChallenge.url, true)}
+                  onRetry={retryProxyConnection}
+                  onDismiss={() => setProxyChallenge(null)}
+                />
+              )}
               {error && <p className="mini-error">{error}</p>}
 
               <section className="mini-list-panel">
@@ -2262,6 +2374,13 @@ function App() {
           </section>
 
           {error && <p className="error-line">{error}</p>}
+          {proxyChallenge && (
+            <ProxyPrompt
+              onOpen={() => openProxyChallenge(proxyChallenge.url, true)}
+              onRetry={retryProxyConnection}
+              onDismiss={() => setProxyChallenge(null)}
+            />
+          )}
         </div>
 
         <section className="items-panel">
@@ -2531,6 +2650,40 @@ function UploadPrompt({ progress }: { progress: UploadProgress }) {
           ? "Processing..."
           : `${progress.percent}% · ${formatBytes(progress.loaded)} / ${formatBytes(progress.total)}`}
       </p>
+    </div>
+  );
+}
+
+function ProxyPrompt({
+  compact = false,
+  onOpen,
+  onRetry,
+  onDismiss,
+}: {
+  compact?: boolean;
+  onOpen: () => void;
+  onRetry: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className={compact ? "proxy-prompt proxy-prompt-compact" : "proxy-prompt"} role="alert">
+      <span className="proxy-prompt-icon" aria-hidden="true">
+        <LockKeyhole size={compact ? 14 : 16} />
+      </span>
+      <div>
+        <strong>Proxy confirmation required</strong>
+        <p>Accept the confirmation page, then retry.</p>
+      </div>
+      <button type="button" className="proxy-prompt-primary" onClick={onOpen}>
+        <ExternalLink size={14} />
+        Open
+      </button>
+      <button type="button" className="proxy-prompt-secondary" onClick={onRetry}>
+        Retry
+      </button>
+      <button type="button" className="proxy-prompt-close" onClick={onDismiss} aria-label="Dismiss">
+        <X size={14} />
+      </button>
     </div>
   );
 }

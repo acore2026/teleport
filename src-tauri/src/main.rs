@@ -9,10 +9,41 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, PhysicalPosition, WebviewWindow, WindowEvent,
+    webview::PageLoadEvent,
+    AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    WindowEvent,
 };
 
 const SERVICE_NAME: &str = "teleport";
+const PROXY_CONFIRM_LABEL: &str = "proxy-confirm";
+const PROXY_CONFIRM_CLICK_SCRIPT: &str = r##"
+(() => {
+  const selectors = [
+    "#continueBtn",
+    "a#continueBtn",
+    "button#continueBtn",
+    "input#continueBtn",
+    "[id='continueBtn']"
+  ];
+  const accept = selectors.map((selector) => document.querySelector(selector)).find(Boolean);
+  if (!accept || window.__teleportProxyAccepted) return;
+  window.__teleportProxyAccepted = true;
+  accept.scrollIntoView({ block: "center", inline: "center" });
+  accept.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window }));
+  accept.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+  accept.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+  accept.click();
+})();
+"##;
+
+fn schedule_proxy_autoclick(window: WebviewWindow) {
+    thread::spawn(move || {
+        for delay in [350_u64, 900, 1600, 2600] {
+            thread::sleep(Duration::from_millis(delay));
+            let _ = window.eval(PROXY_CONFIRM_CLICK_SCRIPT);
+        }
+    });
+}
 
 fn show_main_window(app: &AppHandle) -> Result<(), String> {
     let window = app
@@ -94,6 +125,44 @@ fn toggle_mini_panel(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn open_debug_tools(window: WebviewWindow) {
     window.open_devtools();
+}
+
+#[tauri::command]
+async fn open_proxy_confirmation(app: AppHandle, url: String) -> Result<(), String> {
+    let parsed_url = url
+        .parse()
+        .map_err(|error| format!("Invalid confirmation URL: {error}"))?;
+
+    if let Some(window) = app.get_webview_window(PROXY_CONFIRM_LABEL) {
+        window
+            .navigate(parsed_url)
+            .map_err(|error| error.to_string())?;
+        window.show().map_err(|error| error.to_string())?;
+        window.unminimize().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        schedule_proxy_autoclick(window);
+        return Ok(());
+    }
+
+    let window =
+        WebviewWindowBuilder::new(&app, PROXY_CONFIRM_LABEL, WebviewUrl::External(parsed_url))
+            .title("teleport proxy confirmation")
+            .inner_size(760.0, 560.0)
+            .min_inner_size(420.0, 320.0)
+            .resizable(true)
+            .center()
+            .on_page_load(|window, payload| {
+                if matches!(payload.event(), PageLoadEvent::Finished) {
+                    schedule_proxy_autoclick(window);
+                }
+            })
+            .build()
+            .map_err(|error| error.to_string())?;
+
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    schedule_proxy_autoclick(window);
+    Ok(())
 }
 
 #[tauri::command]
@@ -221,6 +290,7 @@ fn main() {
             hide_mini_panel,
             toggle_mini_panel,
             open_debug_tools,
+            open_proxy_confirmation,
             press_system_shortcut,
             keychain_get,
             keychain_set,

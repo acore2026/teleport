@@ -10,12 +10,13 @@ use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     webview::PageLoadEvent,
-    AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
-    WindowEvent,
+    AppHandle, Emitter, Manager, PhysicalPosition, Url, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder, WindowEvent,
 };
 
 const SERVICE_NAME: &str = "teleport";
 const PROXY_CONFIRM_LABEL: &str = "proxy-confirm";
+const PROXY_CONFIRMED_EVENT: &str = "teleport-proxy-confirmed";
 const PROXY_CONFIRM_CLICK_SCRIPT: &str = r##"
 (() => {
   const now = new Date().toISOString();
@@ -183,9 +184,10 @@ fn open_debug_tools(app: AppHandle, window: WebviewWindow) {
 
 #[tauri::command]
 async fn open_proxy_confirmation(app: AppHandle, url: String) -> Result<(), String> {
-    let parsed_url = url
+    let parsed_url: Url = url
         .parse()
         .map_err(|error| format!("Invalid confirmation URL: {error}"))?;
+    let expected_origin = parsed_url.origin().ascii_serialization();
 
     if let Some(window) = app.get_webview_window(PROXY_CONFIRM_LABEL) {
         window
@@ -206,13 +208,26 @@ async fn open_proxy_confirmation(app: AppHandle, url: String) -> Result<(), Stri
             .resizable(true)
             .devtools(true)
             .center()
-            .on_page_load(|window, payload| {
+            .on_page_load(move |window, payload| {
                 if matches!(payload.event(), PageLoadEvent::Finished) {
+                    if payload.url().as_str().starts_with(&expected_origin) {
+                        let _ = window.app_handle().emit(PROXY_CONFIRMED_EVENT, ());
+                    }
                     schedule_proxy_autoclick(window);
                 }
             })
             .build()
             .map_err(|error| error.to_string())?;
+
+    let app_for_close = app.clone();
+    window.on_window_event(move |event| {
+        if matches!(
+            event,
+            WindowEvent::Destroyed | WindowEvent::CloseRequested { .. }
+        ) {
+            let _ = app_for_close.emit(PROXY_CONFIRMED_EVENT, ());
+        }
+    });
 
     window.show().map_err(|error| error.to_string())?;
     window.set_focus().map_err(|error| error.to_string())?;

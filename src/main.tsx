@@ -1213,6 +1213,33 @@ function App() {
   }, [desktopMode]);
 
   React.useEffect(() => {
+    if (!desktopMode) return undefined;
+
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    listen("teleport-proxy-confirmed", () => {
+      if (cancelled) return;
+      setProxyChallenge(null);
+      setError("");
+      if (!room) return;
+      primeRoomFeed(room);
+      loadRoom(room).catch((caught) => {
+        setError(handleSyncError(caught, "Unable to load room."));
+      });
+    })
+      .then((listener) => {
+        if (cancelled) listener();
+        else unlisten = listener;
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [desktopMode, room, serverUrl]);
+
+  React.useEffect(() => {
     if (!desktopMode || !isMiniWindow) return undefined;
 
     let mounted = true;

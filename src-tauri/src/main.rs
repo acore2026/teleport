@@ -18,21 +18,70 @@ const SERVICE_NAME: &str = "teleport";
 const PROXY_CONFIRM_LABEL: &str = "proxy-confirm";
 const PROXY_CONFIRM_CLICK_SCRIPT: &str = r##"
 (() => {
+  const now = new Date().toISOString();
   const selectors = [
     "#continueBtn",
     "a#continueBtn",
     "button#continueBtn",
     "input#continueBtn",
-    "[id='continueBtn']"
+    "[id='continueBtn']",
+    "a.button",
+    "button",
+    "input[type='button']",
+    "[role='button']"
   ];
-  const accept = selectors.map((selector) => document.querySelector(selector)).find(Boolean);
+
+  const textOf = (node) => [
+    node.id,
+    node.textContent,
+    node.value,
+    node.title,
+    node.ariaLabel
+  ].filter(Boolean).join(" ").trim();
+
+  const buttons = selectors
+    .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+    .filter((node, index, list) => list.indexOf(node) === index)
+    .map((node) => ({
+      id: node.id || "",
+      tag: node.tagName,
+      text: textOf(node).slice(0, 120),
+      visible: Boolean(node.offsetWidth || node.offsetHeight || node.getClientRects().length)
+    }));
+
+  const accept = selectors
+    .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+    .find((node) => {
+      const label = textOf(node);
+      return node.id === "continueBtn" ||
+        /接受|继续|访问|accept|continue|proceed/i.test(label);
+    });
+
+  window.__teleportProxyDebug = {
+    at: now,
+    href: location.href,
+    title: document.title,
+    readyState: document.readyState,
+    frameCount: window.frames.length,
+    buttons,
+    found: Boolean(accept),
+    acceptedAlready: Boolean(window.__teleportProxyAccepted)
+  };
+  console.info("[teleport] proxy autoclick probe", window.__teleportProxyDebug);
+
   if (!accept || window.__teleportProxyAccepted) return;
   window.__teleportProxyAccepted = true;
   accept.scrollIntoView({ block: "center", inline: "center" });
+  accept.focus?.();
+  accept.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 1, pointerType: "mouse", isPrimary: true }));
   accept.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window }));
   accept.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
   accept.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+  accept.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 1, pointerType: "mouse", isPrimary: true }));
   accept.click();
+  window.__teleportProxyDebug.clicked = true;
+  window.__teleportProxyDebug.clickedText = textOf(accept).slice(0, 120);
+  console.info("[teleport] proxy autoclick clicked", window.__teleportProxyDebug);
 })();
 "##;
 
@@ -40,7 +89,9 @@ fn schedule_proxy_autoclick(window: WebviewWindow) {
     thread::spawn(move || {
         for delay in [350_u64, 900, 1600, 2600] {
             thread::sleep(Duration::from_millis(delay));
-            let _ = window.eval(PROXY_CONFIRM_CLICK_SCRIPT);
+            if let Err(error) = window.eval(PROXY_CONFIRM_CLICK_SCRIPT) {
+                eprintln!("teleport proxy autoclick eval failed: {error}");
+            }
         }
     });
 }
@@ -123,8 +174,11 @@ fn toggle_mini_panel(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn open_debug_tools(window: WebviewWindow) {
+fn open_debug_tools(app: AppHandle, window: WebviewWindow) {
     window.open_devtools();
+    if let Some(proxy_window) = app.get_webview_window(PROXY_CONFIRM_LABEL) {
+        proxy_window.open_devtools();
+    }
 }
 
 #[tauri::command]
@@ -150,6 +204,7 @@ async fn open_proxy_confirmation(app: AppHandle, url: String) -> Result<(), Stri
             .inner_size(760.0, 560.0)
             .min_inner_size(420.0, 320.0)
             .resizable(true)
+            .devtools(true)
             .center()
             .on_page_load(|window, payload| {
                 if matches!(payload.event(), PageLoadEvent::Finished) {

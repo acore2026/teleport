@@ -901,6 +901,19 @@ function looksLikeProxyChallenge(text: string) {
   );
 }
 
+function looksLikeBlockedRedirect(caught: unknown) {
+  if (caught instanceof TypeError) return true;
+  if (!(caught instanceof Error)) return false;
+  const message = caught.message.toLowerCase();
+  return (
+    message.includes("failed to fetch") ||
+    message.includes("load failed") ||
+    message.includes("networkerror") ||
+    message.includes("err_failed") ||
+    message.includes("cors")
+  );
+}
+
 async function readJsonPayload(response: Response): Promise<RoomPayload | { error: string }> {
   const contentType = response.headers.get("content-type") || "";
   if (contentType.includes("application/json")) {
@@ -1531,6 +1544,10 @@ function App() {
       registerProxyChallenge(caught);
       return proxyChallengeMessage;
     }
+    if (desktopMode && serverUrl && looksLikeBlockedRedirect(caught)) {
+      registerProxyChallenge(new ProxyChallengeError(serverUrl));
+      return proxyChallengeMessage;
+    }
     return caught instanceof Error ? caught.message : fallback;
   }
 
@@ -1943,7 +1960,9 @@ function App() {
         resolve(payload as RoomPayload);
       };
 
-      request.onerror = () => reject(new Error(`Upload failed for ${file.name}.`));
+      request.onerror = () => {
+        reject(desktopMode ? new ProxyChallengeError(uploadUrl) : new Error(`Upload failed for ${file.name}.`));
+      };
       request.open("POST", uploadUrl);
       request.send(form);
     });

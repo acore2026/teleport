@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository contains `teleport`, a room-based paste and file sync app. The React/Vite frontend lives in `src/`, with the main component in `src/main.tsx` and global styling in `src/styles.css`. The TypeScript Node/Express API, SQLite storage, upload handling, SSE room updates, and static asset serving are in `server/`. Production container files are in `docker/`, `Dockerfile`, and `docker-compose.yml`. README screenshots and design references live in `docs/assets/`. Runtime data is stored under `data/` locally, or `/app/data` in Docker; do not commit uploaded files or SQLite databases.
+This repository contains `teleport`, a room-based paste and file sync app. The React/Vite frontend lives in `src/`, with the bootstrap in `src/main.tsx`, layouts in `src/components/`, behavior in `src/hooks/`, helpers in `src/lib/`, and global styling in `src/styles.css`. The TypeScript Node/Express API, SQLite storage, upload handling, SSE room updates, and static asset serving are in `server/`. Production container files are in `docker/`, `Dockerfile`, and `docker-compose.yml`. README screenshots and design references live in `docs/assets/`. Runtime data is stored under `data/` locally, or `/app/data` in Docker; do not commit uploaded files or SQLite databases.
 
 ## Build, Test, and Development Commands
 
@@ -15,11 +15,11 @@ This repository contains `teleport`, a room-based paste and file sync app. The R
 
 ## Coding Style & Naming Conventions
 
-Use TypeScript/React for frontend code and TypeScript ESM for the server. Keep indentation at two spaces, prefer `const` over `let`, and use descriptive camelCase names for functions, variables, and React state. React components use PascalCase. Keep UI changes in `src/main.tsx` and `src/styles.css` unless a new module clearly reduces complexity. Use existing lucide icons and the current light, minimal design language.
+Use TypeScript/React for frontend code and TypeScript ESM for the server. Keep indentation at two spaces, prefer `const` over `let`, and use descriptive camelCase names for functions, variables, and React state. React components use PascalCase. Keep rendering in `src/components/`, stateful behavior in focused `src/hooks/`, and reusable helpers in `src/lib/`. Keep `src/main.tsx` limited to bootstrapping. Use existing lucide icons and the current light, minimal design language.
 
 ## Testing Guidelines
 
-There is no dedicated test runner configured. Treat `npm run build` as the required baseline check before handoff. For UI changes, verify in a browser or with Playwright screenshots against `http://127.0.0.1:7777/`. For API/storage changes, exercise room item creation, deletion, file download, and 24-hour expiry behavior manually.
+Run `npm test` to build the frontend and server and run the Node integration tests in `tests/` against temporary storage. Treat `npm run build` as the required baseline check before handoff. For UI changes, verify in a browser or with Playwright screenshots against `http://127.0.0.1:7777/`. For API/storage changes, exercise room item creation, deletion, file download, and 24-hour expiry behavior manually.
 
 ## Commit & Pull Request Guidelines
 

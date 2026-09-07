@@ -16,7 +16,8 @@
     "desktop:standalone:macos:arm64": "tauri build --target aarch64-apple-darwin --no-bundle --no-sign",
     "desktop:bundle:linux": "tauri build --bundles deb rpm",
     "desktop:build:macos": "tauri build --target universal-apple-darwin --no-sign",
-    "desktop:build:windows": "tauri build --target x86_64-pc-windows-msvc --no-sign"
+    "desktop:build:windows": "tauri build --target x86_64-pc-windows-msvc --no-sign",
+    "test": "npm run build && node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",

@@ -14,3 +14,4 @@ src-tauri/icons/android/
 src-tauri/icons/ios/
 src-tauri/target/
 *.log
+.playwright-cli/

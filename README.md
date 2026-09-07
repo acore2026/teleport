@@ -120,13 +120,31 @@ npm run desktop:standalone:macos:arm64
 
 Linux desktop builds require WebKitGTK and appindicator development packages. macOS target builds must run on macOS. The CI workflow documents the packages and runners used for each platform.
 
+## Verification
+
+Run `npm test` to build both applications and exercise the room API, SSE updates, file download, deletion, and 24-hour expiry cleanup against temporary SQLite storage.
+
 ## Project Structure
 
 ```text
 src/                 React/Vite frontend
-src/main.tsx         Main application UI and desktop-aware behavior
+src/main.tsx         React bootstrap
+src/App.tsx          Selects the full workspace or desktop mini window
+src/components/      Layouts, room forms, item cards, and prompts
+src/hooks/           Room feed, text cache, clipboard, and app coordination
+src/lib/             API, uploads, text codec, storage, and desktop helpers
+src/types.ts         Frontend domain types
+src/config.ts        Client defaults and persistent setting keys
+public/favicon.svg   Browser tab icon
 src/styles.css       Global light theme and responsive layout
-server/              TypeScript Express API, SQLite storage, uploads, SSE
+server/index.ts      Starts the server and schedules expiry cleanup
+server/app.ts        HTTP routes, uploads, and error handling
+server/database.ts   SQLite schema, migrations, and prepared statements
+server/rooms.ts      Item serialization and room payloads
+server/events.ts     SSE channels and broadcasts
+server/cleanup.ts    Expired item and file cleanup
+server/files.ts      File naming, hashing, and removal
+server/config.ts     Runtime paths, limits, and environment settings
 src-tauri/           Tauri desktop client
 docker/              nginx config and container entrypoint
 docs/assets/         README screenshots and design references

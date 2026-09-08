@@ -729,6 +729,7 @@ export function useTeleport() {
       }
 
       syncRoomItems(nextItems, room, false);
+      return true;
     } catch (caught) {
       setError(handleSyncError(caught, "Text sync failed."));
     }
@@ -865,6 +866,7 @@ export function useTeleport() {
     retryProxyConnection,
     enterRoom,
     enterRecentRoom,
+    uploadText,
     handlePaste,
     handleDragOver,
     handleDrop,

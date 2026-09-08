@@ -42,7 +42,7 @@ type Options = {
   setSettingsMessage: (message: string) => void;
   setError: (message: string) => void;
   setIsEditingRoom: (editing: boolean) => void;
-  uploadText: (content: string) => Promise<void>;
+  uploadText: (content: string) => Promise<unknown>;
   uploadFiles: (files: FileList | File[]) => Promise<void>;
   lastClipboardWriteSignatureRef: React.RefObject<string>;
 };

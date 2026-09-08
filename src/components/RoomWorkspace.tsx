@@ -17,6 +17,7 @@ import { absoluteItemUrl } from "../lib/api";
 import { ItemCard } from "./ItemCard";
 import { ProxyPrompt } from "./ProxyPrompt";
 import { RoomPrompt } from "./RoomPrompt";
+import { TextComposer } from "./TextComposer";
 import { UploadPrompt } from "./UploadPrompt";
 
 export function RoomWorkspace({ model }: { model: TeleportModel }) {
@@ -50,6 +51,7 @@ export function RoomWorkspace({ model }: { model: TeleportModel }) {
     retryProxyConnection,
     enterRoom,
     enterRecentRoom,
+    uploadText,
     handlePaste,
     handleDragOver,
     handleDrop,
@@ -163,6 +165,8 @@ export function RoomWorkspace({ model }: { model: TeleportModel }) {
               {uploadProgress && <UploadPrompt progress={uploadProgress} />}
             </div>
           </section>
+
+          <TextComposer key={`${serverUrl}:${room}`} room={room} onSend={uploadText} />
 
           <section className="recent-panel">
             <h2>Recent rooms</h2>

@@ -46,6 +46,9 @@ export function looksLikeBlockedRedirect(caught: unknown) {
 }
 
 export async function readJsonPayload(response: Response): Promise<RoomPayload | { error: string }> {
+  if (response.status === 403) {
+    throw new ProxyChallengeError(response.url);
+  }
   const contentType = response.headers.get("content-type") || "";
   if (contentType.includes("application/json")) {
     return (await response.json()) as RoomPayload | { error: string };

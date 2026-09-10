@@ -26,7 +26,8 @@ type ReceiveChunkOptions = ChunkMetadata & {
   room: string;
   uploadId: string;
   chunkIndex: number;
-  tempPath: string;
+  tempPath?: string;
+  chunkData?: Buffer;
 };
 
 function invalidChunk(message: string) {
@@ -68,11 +69,23 @@ export function parseChunkRequest(uploadId: string, body: Record<string, unknown
   };
 }
 
+export function parseBase64Chunk(value: unknown) {
+  if (typeof value !== "string") throw invalidChunk("Upload chunk is missing.");
+  const maximumEncodedLength = Math.ceil(maxUploadChunkBytes / 3) * 4;
+  if (value.length > maximumEncodedLength || value.length % 4 !== 0) {
+    throw invalidChunk("Upload chunk encoding is invalid.");
+  }
+  if (value && !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+    throw invalidChunk("Upload chunk encoding is invalid.");
+  }
+  return Buffer.from(value, "base64");
+}
+
 export async function receiveUploadChunk(options: ReceiveChunkOptions) {
   const existing = selectItem.get(options.room, options.uploadId, Date.now()) as RoomItemRow | undefined;
   if (existing) {
     if (existing.type !== "file") throw invalidChunk("Upload ID is already in use.");
-    await unlink(options.tempPath).catch(() => undefined);
+    if (options.tempPath) await unlink(options.tempPath).catch(() => undefined);
     return { complete: true, uploadedChunks: options.totalChunks };
   }
 
@@ -99,7 +112,13 @@ export async function receiveUploadChunk(options: ReceiveChunkOptions) {
   }
 
   const partPath = join(uploadDir, `${options.chunkIndex}.part`);
-  await rename(options.tempPath, partPath);
+  if (options.tempPath) {
+    await rename(options.tempPath, partPath);
+  } else if (options.chunkData) {
+    await writeFile(partPath, options.chunkData);
+  } else {
+    throw invalidChunk("Upload chunk is missing.");
+  }
   const expectedPartSize = Math.min(
     options.chunkSize,
     Math.max(0, options.fileSize - options.chunkIndex * options.chunkSize),

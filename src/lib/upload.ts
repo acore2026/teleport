@@ -1,5 +1,6 @@
 import type { RoomPayload, UploadProgress } from "../types";
 import { apiUrl, looksLikeProxyChallenge, ProxyChallengeError } from "./api";
+import { base64FromBytes } from "./text-codec";
 
 type UploadOptions = {
   room: string;
@@ -34,11 +35,20 @@ function createUploadId() {
     .join("")}-${hex.slice(10).join("")}`;
 }
 
-function sendUpload(url: string, form: FormData, desktopMode: boolean, onProgress: (loaded: number) => void) {
+function sendUpload(
+  url: string,
+  body: FormData | string,
+  desktopMode: boolean,
+  onProgress: (loaded: number) => void,
+) {
   return new Promise<UploadResponse>((resolve, reject) => {
     const request = new XMLHttpRequest();
     request.upload.onprogress = (event) => onProgress(event.loaded);
     request.onload = () => {
+      if (request.status === 403) {
+        reject(new ProxyChallengeError(request.responseURL || url));
+        return;
+      }
       try {
         resolve({ status: request.status, payload: JSON.parse(request.responseText || "{}") });
       } catch {
@@ -53,7 +63,8 @@ function sendUpload(url: string, form: FormData, desktopMode: boolean, onProgres
       reject(desktopMode ? new ProxyChallengeError(url) : new Error("Upload failed."));
     };
     request.open("POST", url);
-    request.send(form);
+    if (typeof body === "string") request.setRequestHeader("content-type", "application/json");
+    request.send(body);
   });
 }
 
@@ -109,17 +120,19 @@ async function uploadInChunks(file: File, index: number, totalFiles: number, opt
   for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
     const offset = chunkIndex * chunkSize;
     const chunk = file.slice(offset, Math.min(file.size, offset + chunkSize));
-    const form = new FormData();
-    form.append("chunk", chunk, `${file.name}.part`);
-    form.append("fileName", file.name);
-    form.append("mimeType", file.type || "application/octet-stream");
-    form.append("fileSize", String(file.size));
-    form.append("chunkSize", String(chunkSize));
-    form.append("chunkIndex", String(chunkIndex));
-    form.append("totalChunks", String(totalChunks));
+    const chunkBytes = new Uint8Array(await chunk.arrayBuffer());
+    const body = JSON.stringify({
+      chunkBase64: base64FromBytes(chunkBytes),
+      fileName: file.name,
+      mimeType: file.type || "application/octet-stream",
+      fileSize: file.size,
+      chunkSize,
+      chunkIndex,
+      totalChunks,
+    });
     reportProgress(file, index, totalFiles, options.onProgress, offset, chunkIndex + 1, totalChunks);
 
-    const response = await sendUpload(uploadUrl, form, options.desktopMode, (loaded) => {
+    const response = await sendUpload(uploadUrl, body, options.desktopMode, (loaded) => {
       reportProgress(
         file,
         index,

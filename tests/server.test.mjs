@@ -97,21 +97,19 @@ test("room API preserves items, broadcasts changes, and expires stored files", a
     const totalChunks = Math.ceil(chunkedBytes.length / chunkSize);
     const uploadId = "550e8400-e29b-41d4-a716-446655440000";
     for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
-      const chunkForm = new FormData();
-      chunkForm.append(
-        "chunk",
-        new Blob([chunkedBytes.subarray(chunkIndex * chunkSize, (chunkIndex + 1) * chunkSize)]),
-        "chunked.txt.part",
-      );
-      chunkForm.append("fileName", "chunked.txt");
-      chunkForm.append("mimeType", "text/plain");
-      chunkForm.append("fileSize", String(chunkedBytes.length));
-      chunkForm.append("chunkSize", String(chunkSize));
-      chunkForm.append("chunkIndex", String(chunkIndex));
-      chunkForm.append("totalChunks", String(totalChunks));
+      const chunk = chunkedBytes.subarray(chunkIndex * chunkSize, (chunkIndex + 1) * chunkSize);
       const chunkResponse = await fetch(`${roomUrl}/uploads/${uploadId}/chunks`, {
         method: "POST",
-        body: chunkForm,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          chunkBase64: chunk.toString("base64"),
+          fileName: "chunked.txt",
+          mimeType: "text/plain",
+          fileSize: chunkedBytes.length,
+          chunkSize,
+          chunkIndex,
+          totalChunks,
+        }),
       });
       assert.equal(chunkResponse.status, chunkIndex === totalChunks - 1 ? 201 : 202);
       if (chunkIndex < totalChunks - 1) {

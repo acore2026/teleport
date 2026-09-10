@@ -45,6 +45,8 @@ export type UploadProgress = {
   loaded: number;
   total: number;
   processing: boolean;
+  chunkIndex?: number;
+  totalChunks?: number;
 };
 
 export type ProxyChallenge = {
@@ -78,6 +80,8 @@ export type DesktopStateSync = {
   room?: string;
   serverUrl?: string;
   roomPassword?: string;
+  chunkUploadsEnabled?: boolean;
+  chunkSizeKb?: number;
 };
 
 export type CryptoEnvelope = {

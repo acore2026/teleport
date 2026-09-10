@@ -16,7 +16,11 @@ export function UploadPrompt({ progress }: { progress: UploadProgress }) {
       <p>
         {progress.processing
           ? "Processing..."
-          : `${progress.percent}% · ${formatBytes(progress.loaded)} / ${formatBytes(progress.total)}`}
+          : `${progress.percent}% · ${formatBytes(progress.loaded)} / ${formatBytes(progress.total)}${
+              progress.totalChunks && progress.totalChunks > 1
+                ? ` · Chunk ${progress.chunkIndex} of ${progress.totalChunks}`
+                : ""
+            }`}
       </p>
     </div>
   );

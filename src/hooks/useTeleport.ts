@@ -17,12 +17,17 @@ import React from "react";
 import {
   autoCaptureClipboardKey,
   autoCopyIncomingKey,
+  chunkSizeKbKey,
+  chunkUploadsEnabledKey,
   copyShortcutKey,
+  defaultChunkSizeKb,
   defaultDesktopServerUrl,
   legacyOpenPanelShortcuts,
   maxFileBytes,
+  maxChunkSizeKb,
   maxTextBytes,
   minifiedModeKey,
+  minChunkSizeKb,
   notificationsEnabledKey,
   openPanelShortcutKey,
   pasteShortcutKey,
@@ -51,7 +56,9 @@ import {
 import {
   initialBooleanSetting,
   initialMinifiedMode,
+  initialNumberSetting,
   initialServerUrl,
+  initialStoredBooleanSetting,
   initialShortcut,
   isDesktopRuntime,
   keychainGet,
@@ -107,6 +114,14 @@ export function useTeleport() {
     () => initialBooleanSetting(notificationsEnabledKey, true),
     [],
   );
+  const initialChunkUploadsEnabled = React.useMemo(
+    () => initialStoredBooleanSetting(chunkUploadsEnabledKey, true),
+    [],
+  );
+  const initialChunkSizeKb = React.useMemo(
+    () => initialNumberSetting(chunkSizeKbKey, defaultChunkSizeKb, minChunkSizeKb, maxChunkSizeKb),
+    [],
+  );
   const [roomInput, setRoomInput] = React.useState(initialRoomValue);
   const [room, setRoom] = React.useState(initialRoomValue);
   const [serverInput, setServerInput] = React.useState(initialServerValue);
@@ -127,6 +142,8 @@ export function useTeleport() {
   const [autoCaptureClipboard, setAutoCaptureClipboard] = React.useState(initialAutoCaptureClipboard);
   const [autoCopyIncoming, setAutoCopyIncoming] = React.useState(initialAutoCopyIncoming);
   const [notificationsEnabled, setNotificationsEnabled] = React.useState(initialNotificationsEnabled);
+  const [chunkUploadsEnabled, setChunkUploadsEnabled] = React.useState(initialChunkUploadsEnabled);
+  const [chunkSizeKb, setChunkSizeKb] = React.useState(initialChunkSizeKb);
   const [passwordInput, setPasswordInput] = React.useState(() =>
     initialRoomValue && !desktopMode ? passwordForRoom(initialRoomValue) : "",
   );
@@ -200,10 +217,21 @@ export function useTeleport() {
         room: next.room ?? room,
         serverUrl: next.serverUrl ?? serverUrl,
         roomPassword: next.roomPassword ?? roomPassword,
+        chunkUploadsEnabled: next.chunkUploadsEnabled ?? chunkUploadsEnabled,
+        chunkSizeKb: next.chunkSizeKb ?? chunkSizeKb,
       }).catch(() => undefined);
     },
-    [desktopMode, room, roomPassword, serverUrl],
+    [chunkSizeKb, chunkUploadsEnabled, desktopMode, room, roomPassword, serverUrl],
   );
+
+  React.useEffect(() => {
+    localStorage.setItem(chunkUploadsEnabledKey, String(chunkUploadsEnabled));
+    localStorage.setItem(chunkSizeKbKey, String(chunkSizeKb));
+    if (desktopSettingsReady && desktopStoreRef.current) {
+      desktopStoreRef.current.set(chunkUploadsEnabledKey, chunkUploadsEnabled).catch(() => undefined);
+      desktopStoreRef.current.set(chunkSizeKbKey, chunkSizeKb).catch(() => undefined);
+    }
+  }, [chunkSizeKb, chunkUploadsEnabled, desktopSettingsReady]);
 
   React.useEffect(() => {
     autoCopyIncomingRef.current = autoCopyIncoming;
@@ -252,6 +280,9 @@ export function useTeleport() {
         const storedAutoCopy = (await store.get<boolean>(autoCopyIncomingKey)) ?? initialAutoCopyIncoming;
         const storedNotifications =
           (await store.get<boolean>(notificationsEnabledKey)) ?? initialNotificationsEnabled;
+        const storedChunkUploads =
+          (await store.get<boolean>(chunkUploadsEnabledKey)) ?? initialChunkUploadsEnabled;
+        const storedChunkSize = (await store.get<number>(chunkSizeKbKey)) ?? initialChunkSizeKb;
         const nextRoom = storedRoom ? normalizeRoom(storedRoom) : "";
         const nextPassword = nextRoom ? await keychainGet(nextRoom) : "";
 
@@ -268,6 +299,8 @@ export function useTeleport() {
         setAutoCaptureClipboard(storedAutoCapture);
         setAutoCopyIncoming(storedAutoCopy);
         setNotificationsEnabled(storedNotifications);
+        setChunkUploadsEnabled(storedChunkUploads);
+        setChunkSizeKb(Math.min(maxChunkSizeKb, Math.max(minChunkSizeKb, storedChunkSize)));
         if (nextRoom) {
           setRoom(nextRoom);
           setRoomInput(nextRoom);
@@ -295,6 +328,8 @@ export function useTeleport() {
     initialAutoCopyIncoming,
     initialMinifiedValue,
     initialNotificationsEnabled,
+    initialChunkUploadsEnabled,
+    initialChunkSizeKb,
     initialRoomValue,
     initialServerValue,
     isMiniWindow,
@@ -324,6 +359,13 @@ export function useTeleport() {
       if (payload.serverUrl !== undefined) {
         setServerUrl(payload.serverUrl);
         setServerInput(payload.serverUrl);
+      }
+
+      if (payload.chunkUploadsEnabled !== undefined) {
+        setChunkUploadsEnabled(payload.chunkUploadsEnabled);
+      }
+      if (payload.chunkSizeKb !== undefined) {
+        setChunkSizeKb(payload.chunkSizeKb);
       }
 
       if (payload.room !== undefined) {
@@ -392,6 +434,8 @@ export function useTeleport() {
     isMiniWindow,
     minifiedMode,
     notificationsEnabled,
+    chunkUploadsEnabled,
+    chunkSizeKb,
     openPanelInput,
     pasteInput,
     serverInput,
@@ -615,6 +659,8 @@ export function useTeleport() {
       localStorage.setItem(autoCaptureClipboardKey, String(autoCaptureClipboard));
       localStorage.setItem(autoCopyIncomingKey, String(autoCopyIncoming));
       localStorage.setItem(notificationsEnabledKey, String(notificationsEnabled));
+      localStorage.setItem(chunkUploadsEnabledKey, String(chunkUploadsEnabled));
+      localStorage.setItem(chunkSizeKbKey, String(chunkSizeKb));
 
       if (desktopStoreRef.current) {
         await desktopStoreRef.current.set(serverUrlKey, nextServerUrl);
@@ -625,9 +671,17 @@ export function useTeleport() {
         await desktopStoreRef.current.set(autoCaptureClipboardKey, autoCaptureClipboard);
         await desktopStoreRef.current.set(autoCopyIncomingKey, autoCopyIncoming);
         await desktopStoreRef.current.set(notificationsEnabledKey, notificationsEnabled);
+        await desktopStoreRef.current.set(chunkUploadsEnabledKey, chunkUploadsEnabled);
+        await desktopStoreRef.current.set(chunkSizeKbKey, chunkSizeKb);
       }
 
-      publishDesktopState({ room, serverUrl: nextServerUrl, roomPassword });
+      publishDesktopState({
+        room,
+        serverUrl: nextServerUrl,
+        roomPassword,
+        chunkUploadsEnabled,
+        chunkSizeKb,
+      });
       if (isMiniWindow && !minifiedMode) {
         await openFullWindow();
       }
@@ -759,6 +813,9 @@ export function useTeleport() {
           serverUrl,
           desktopMode,
           onProgress: setUploadProgress,
+          chunkSizeBytes: chunkUploadsEnabled
+            ? Math.min(maxChunkSizeKb, Math.max(minChunkSizeKb, Math.round(chunkSizeKb))) * 1024
+            : null,
         });
         syncRoomItems(payload.items, room, false);
       } catch (caught) {
@@ -850,6 +907,10 @@ export function useTeleport() {
     isDragging,
     setIsDragging,
     uploadProgress,
+    chunkUploadsEnabled,
+    setChunkUploadsEnabled,
+    chunkSizeKb,
+    setChunkSizeKb,
     copiedItemId,
     newItemNotice,
     expandedImage,

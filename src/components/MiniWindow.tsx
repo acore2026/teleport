@@ -6,6 +6,7 @@ import { ProxyPrompt } from "./ProxyPrompt";
 import { RoomPrompt } from "./RoomPrompt";
 import { ShortcutInput } from "./ShortcutInput";
 import { UploadPrompt } from "./UploadPrompt";
+import { UploadSettings } from "./UploadSettings";
 
 export function MiniWindow({ model }: { model: TeleportModel }) {
   const {
@@ -45,6 +46,10 @@ export function MiniWindow({ model }: { model: TeleportModel }) {
     isMiniSettingsOpen,
     setIsMiniSettingsOpen,
     settingsMessage,
+    chunkUploadsEnabled,
+    setChunkUploadsEnabled,
+    chunkSizeKb,
+    setChunkSizeKb,
     proxyChallenge,
     setProxyChallenge,
     pasteBoxRef,
@@ -111,6 +116,13 @@ export function MiniWindow({ model }: { model: TeleportModel }) {
             </div>
 
             <div className="mini-settings-form">
+              <UploadSettings
+                compact
+                enabled={chunkUploadsEnabled}
+                chunkSizeKb={chunkSizeKb}
+                onEnabledChange={setChunkUploadsEnabled}
+                onChunkSizeChange={setChunkSizeKb}
+              />
               <label className="mini-toggle">
                 <span>
                   <strong>Minified mode</strong>

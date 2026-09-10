@@ -10,6 +10,7 @@ import { deleteItem, insertItem, selectItem, selectItemForDelete } from "./datab
 import { broadcast, channelFor, channels, sendEvent } from "./events.js";
 import { hashBuffer, hashFile, removeStoredFile, safeFileName } from "./files.js";
 import { payloadFor } from "./rooms.js";
+import { parseChunkRequest, receiveUploadChunk } from "./chunk-uploads.js";
 import type { AsyncHandler, ExpiredItemRow, HttpError, RoomItemRow } from "./types.js";
 
 const upload = multer({
@@ -160,6 +161,26 @@ app.post(
       textEncoding || null,
     );
 
+    broadcast(room, "items");
+    res.status(201).json(payloadFor(room));
+  }),
+);
+
+app.post(
+  "/api/rooms/:room/uploads/:uploadId/chunks",
+  upload.single("chunk"),
+  asyncRoute(async (req, res) => {
+    const room = normalizeRoom(req.params.room);
+    if (!req.file) {
+      res.status(400).json({ error: "Upload chunk is missing." });
+      return;
+    }
+    const metadata = parseChunkRequest(String(req.params.uploadId), req.body as Record<string, unknown>);
+    const result = await receiveUploadChunk({ room, tempPath: req.file.path, ...metadata });
+    if (!result.complete) {
+      res.status(202).json(result);
+      return;
+    }
     broadcast(room, "items");
     res.status(201).json(payloadFor(room));
   }),

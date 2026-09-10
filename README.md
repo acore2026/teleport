@@ -12,6 +12,7 @@
 
 - Real-time room sync over Server-Sent Events.
 - Text pastes, file drops, image paste support, image previews, and one-click copy/download.
+- Configurable chunked file uploads, enabled by default with 50 KB chunks for unreliable connections.
 - 24-hour auto-destroy for every item.
 - Lightweight room model: no account system, no device list, no generated share flow.
 - Client-side text encryption before upload; files are transferred and stored as uploaded.

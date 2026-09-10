@@ -487,6 +487,120 @@ button {
   gap: 1rem;
 }
 
+.chunk-setting {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  background: #ffffff;
+}
+
+.chunk-setting-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  cursor: pointer;
+}
+
+.chunk-setting-icon {
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background: #f3f0ff;
+  color: #6d28d9;
+}
+
+.chunk-setting-copy {
+  display: grid;
+  flex: 1;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.chunk-setting-copy strong,
+.chunk-size-field > span:first-child {
+  color: #0f172a;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.chunk-setting-copy small {
+  color: #64748b;
+  font-size: 0.75rem;
+}
+
+.chunk-setting-toggle input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: #7c3aed;
+}
+
+.chunk-size-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #eef2f7;
+}
+
+.chunk-size-input {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.5rem;
+  background: #f8fafc;
+}
+
+.chunk-size-input:focus-within {
+  border-color: #8b5cf6;
+  box-shadow: 0 0 0 2px #ede9fe;
+}
+
+.chunk-size-input input {
+  width: 5rem;
+  padding: 0.45rem 0.55rem;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #0f172a;
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: right;
+}
+
+.chunk-size-input span {
+  padding-right: 0.55rem;
+  color: #64748b;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.chunk-setting-compact {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.mini-settings-form .chunk-setting-toggle,
+.mini-settings-form .chunk-size-field {
+  display: flex;
+}
+
+.mini-settings-form .chunk-size-input input {
+  width: 5rem;
+  padding: 0.45rem 0.55rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
 .drop-panel,
 .recent-panel,
 .items-panel {

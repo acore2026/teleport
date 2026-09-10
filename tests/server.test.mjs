@@ -34,7 +34,9 @@ test("room API preserves items, broadcasts changes, and expires stored files", a
     assert.equal(health.ttlMs, 24 * 60 * 60 * 1000);
     assert.equal((await fetch(`${base}/api/rooms/invalid%20room/items`)).status, 400);
 
-    const events = await fetch(`${roomUrl}/events`, { signal: streamController.signal });
+    const events = await fetch(`${roomUrl}/events`, {
+      signal: streamController.signal,
+    });
     assert.match(events.headers.get("content-type"), /text\/event-stream/);
     const reader = events.body.getReader();
     const decoder = new TextDecoder();
@@ -59,24 +61,83 @@ test("room API preserves items, broadcasts changes, and expires stored files", a
     assert.equal(textItem.expiresAt - textItem.createdAt, health.ttlMs);
     assert.equal((await nextEvent()).items[0].id, textItem.id);
 
-    const cryptoMeta = { v: 2, cipher: "AES-CBC-HMAC-SHA256", salt: "test-salt" };
-    const sealed = await post({ content: "opaque-ciphertext", encrypted: true, cryptoMeta });
+    const cryptoMeta = {
+      v: 2,
+      cipher: "AES-CBC-HMAC-SHA256",
+      salt: "test-salt",
+    };
+    const sealed = await post({
+      content: "opaque-ciphertext",
+      encrypted: true,
+      cryptoMeta,
+    });
     assert.deepEqual(sealed.items.find((item) => item.encrypted).cryptoMeta, cryptoMeta);
     await nextEvent();
-    const compressed = await post({ content: "opaque-base64", textEncoding: "gzip-base64" });
+    const compressed = await post({
+      content: "opaque-base64",
+      textEncoding: "gzip-base64",
+    });
     assert.equal(compressed.items.find((item) => item.textEncoding).textEncoding, "gzip-base64");
     await nextEvent();
 
     const form = new FormData();
     form.append("file", new Blob(["file contents"], { type: "text/plain" }), "sample.txt");
-    const upload = await fetch(`${roomUrl}/items`, { method: "POST", body: form });
+    const upload = await fetch(`${roomUrl}/items`, {
+      method: "POST",
+      body: form,
+    });
     assert.equal(upload.status, 201);
     const fileItem = (await upload.json()).items.find((item) => item.type === "file");
     assert.equal(fileItem.fileName, "sample.txt");
     assert.equal(await (await fetch(`${base}${fileItem.downloadUrl}`)).text(), "file contents");
     await nextEvent();
 
-    const removed = await fetch(`${roomUrl}/items/${textItem.id}`, { method: "DELETE" });
+    const chunkedBytes = Buffer.from("chunked-file-content-".repeat(6000));
+    const chunkSize = 50 * 1024;
+    const totalChunks = Math.ceil(chunkedBytes.length / chunkSize);
+    const uploadId = "550e8400-e29b-41d4-a716-446655440000";
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+      const chunkForm = new FormData();
+      chunkForm.append(
+        "chunk",
+        new Blob([chunkedBytes.subarray(chunkIndex * chunkSize, (chunkIndex + 1) * chunkSize)]),
+        "chunked.txt.part",
+      );
+      chunkForm.append("fileName", "chunked.txt");
+      chunkForm.append("mimeType", "text/plain");
+      chunkForm.append("fileSize", String(chunkedBytes.length));
+      chunkForm.append("chunkSize", String(chunkSize));
+      chunkForm.append("chunkIndex", String(chunkIndex));
+      chunkForm.append("totalChunks", String(totalChunks));
+      const chunkResponse = await fetch(`${roomUrl}/uploads/${uploadId}/chunks`, {
+        method: "POST",
+        body: chunkForm,
+      });
+      assert.equal(chunkResponse.status, chunkIndex === totalChunks - 1 ? 201 : 202);
+      if (chunkIndex < totalChunks - 1) {
+        const pendingItems = (await (await fetch(`${roomUrl}/items`)).json()).items;
+        assert.equal(
+          pendingItems.some((item) => item.fileName === "chunked.txt"),
+          false,
+        );
+      }
+    }
+    const chunkedItem = (await (await fetch(`${roomUrl}/items`)).json()).items.find(
+      (item) => item.fileName === "chunked.txt",
+    );
+    assert.equal(chunkedItem.fileSize, chunkedBytes.length);
+    assert.deepEqual(
+      Buffer.from(await (await fetch(`${base}${chunkedItem.downloadUrl}`)).arrayBuffer()),
+      chunkedBytes,
+    );
+    assert.equal(
+      (await nextEvent()).items.some((item) => item.id === uploadId),
+      true,
+    );
+
+    const removed = await fetch(`${roomUrl}/items/${textItem.id}`, {
+      method: "DELETE",
+    });
     assert.equal(
       (await removed.json()).items.some((item) => item.id === textItem.id),
       false,

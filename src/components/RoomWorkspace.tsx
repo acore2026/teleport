@@ -19,6 +19,7 @@ import { ProxyPrompt } from "./ProxyPrompt";
 import { RoomPrompt } from "./RoomPrompt";
 import { TextComposer } from "./TextComposer";
 import { UploadPrompt } from "./UploadPrompt";
+import { UploadSettings } from "./UploadSettings";
 
 export function RoomWorkspace({ model }: { model: TeleportModel }) {
   const {
@@ -39,6 +40,10 @@ export function RoomWorkspace({ model }: { model: TeleportModel }) {
     isDragging,
     setIsDragging,
     uploadProgress,
+    chunkUploadsEnabled,
+    setChunkUploadsEnabled,
+    chunkSizeKb,
+    setChunkSizeKb,
     copiedItemId,
     newItemNotice,
     expandedImage,
@@ -165,6 +170,13 @@ export function RoomWorkspace({ model }: { model: TeleportModel }) {
               {uploadProgress && <UploadPrompt progress={uploadProgress} />}
             </div>
           </section>
+
+          <UploadSettings
+            enabled={chunkUploadsEnabled}
+            chunkSizeKb={chunkSizeKb}
+            onEnabledChange={setChunkUploadsEnabled}
+            onChunkSizeChange={setChunkSizeKb}
+          />
 
           <TextComposer key={`${serverUrl}:${room}`} room={room} onSend={uploadText} />
 

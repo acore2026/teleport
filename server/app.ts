@@ -6,12 +6,25 @@ import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { rename } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { appRoot, distDir, maxFileBytes, maxTextBytes, tempRoot, ttlMs, uploadRoot } from "./config.js";
-import { deleteItem, insertItem, selectItem, selectItemForDelete } from "./database.js";
+import {
+  deleteItem,
+  insertItem,
+  selectItem,
+  selectItemForDelete,
+  selectItemForPin,
+  updateItemPin,
+} from "./database.js";
 import { broadcast, channelFor, channels, sendEvent } from "./events.js";
 import { hashBuffer, hashFile, removeStoredFile, safeFileName } from "./files.js";
 import { payloadFor } from "./rooms.js";
 import { parseBase64Chunk, parseChunkRequest, receiveUploadChunk } from "./chunk-uploads.js";
-import type { AsyncHandler, ExpiredItemRow, HttpError, RoomItemRow } from "./types.js";
+import type {
+  AsyncHandler,
+  ExpiredItemRow,
+  HttpError,
+  PinnableItemRow,
+  RoomItemRow,
+} from "./types.js";
 
 const upload = multer({
   dest: tempRoot,
@@ -45,7 +58,7 @@ export const app = express();
 app.disable("x-powered-by");
 app.use("/api", (req, res, next) => {
   res.setHeader("access-control-allow-origin", "*");
-  res.setHeader("access-control-allow-methods", "GET,POST,DELETE,OPTIONS");
+  res.setHeader("access-control-allow-methods", "GET,POST,PATCH,DELETE,OPTIONS");
   res.setHeader("access-control-allow-headers", "content-type");
   if (req.method === "OPTIONS") {
     res.sendStatus(204);
@@ -212,6 +225,27 @@ app.delete("/api/rooms/:room/items/:id", (req, res) => {
   const item = selectItemForDelete.get(room, req.params.id) as ExpiredItemRow | undefined;
   if (item) removeStoredFile(item.filePath);
   deleteItem.run(room, req.params.id);
+  broadcast(room, "items");
+  res.json(payloadFor(room));
+});
+
+app.patch("/api/rooms/:room/items/:id/pin", (req, res) => {
+  const room = normalizeRoom(req.params.room);
+  const pinned = req.body?.pinned;
+  if (typeof pinned !== "boolean") {
+    res.status(400).json({ error: "Pinned must be true or false." });
+    return;
+  }
+
+  const now = Date.now();
+  const item = selectItemForPin.get(room, req.params.id, now) as PinnableItemRow | undefined;
+  if (!item) {
+    res.status(404).json({ error: "Item not found." });
+    return;
+  }
+
+  const expiresAt = pinned ? item.expiresAt : now + ttlMs;
+  updateItemPin.run(pinned ? 1 : 0, expiresAt, room, req.params.id);
   broadcast(room, "items");
   res.json(payloadFor(room));
 });

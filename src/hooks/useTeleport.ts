@@ -840,6 +840,31 @@ export function useTeleport() {
     }
   }
 
+  async function togglePin(item: RoomItem) {
+    try {
+      const response = await fetch(
+        apiUrl(
+          `/api/rooms/${encodeURIComponent(room)}/items/${encodeURIComponent(item.id)}/pin`,
+          serverUrl,
+        ),
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ pinned: !item.pinned }),
+        },
+      );
+      const payload = await readJsonPayload(response);
+      if (response.ok) {
+        setError("");
+        syncRoomItems((payload as RoomPayload).items, room, false);
+      } else {
+        setError("error" in payload ? payload.error : "Unable to update pin.");
+      }
+    } catch (caught) {
+      setError(handleSyncError(caught, "Unable to update pin."));
+    }
+  }
+
   async function copyItem(item: RoomItem) {
     const didCopy = await writeItemToClipboard(item);
     if (!didCopy) return;
@@ -932,6 +957,7 @@ export function useTeleport() {
     handleDragOver,
     handleDrop,
     deleteItem,
+    togglePin,
     copyItem,
     downloadItem,
     startMiniWindowDrag,

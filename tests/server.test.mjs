@@ -92,6 +92,32 @@ test("room API preserves items, broadcasts changes, and expires stored files", a
     assert.equal(await (await fetch(`${base}${fileItem.downloadUrl}`)).text(), "file contents");
     await nextEvent();
 
+    const pinnedResponse = await fetch(`${roomUrl}/items/${fileItem.id}/pin`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pinned: true }),
+    });
+    assert.equal(pinnedResponse.status, 200);
+    assert.equal((await pinnedResponse.json()).items.find((item) => item.id === fileItem.id).pinned, true);
+    await nextEvent();
+    const { file_path: pinnedStoredPath } = database
+      .prepare("SELECT file_path FROM room_items WHERE id = ?")
+      .get(fileItem.id);
+    database.prepare("UPDATE room_items SET expires_at = ? WHERE id = ?").run(Date.now() - 1, fileItem.id);
+    pruneExpired();
+    assert.equal(existsSync(resolve(pinnedStoredPath)), true);
+    assert.equal(await (await fetch(`${base}${fileItem.downloadUrl}`)).text(), "file contents");
+    const unpinnedResponse = await fetch(`${roomUrl}/items/${fileItem.id}/pin`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pinned: false }),
+    });
+    const unpinnedItem = (await unpinnedResponse.json()).items.find((item) => item.id === fileItem.id);
+    assert.equal(unpinnedResponse.status, 200);
+    assert.equal(unpinnedItem.pinned, false);
+    assert.ok(unpinnedItem.expiresAt > Date.now());
+    await nextEvent();
+
     const chunkedBytes = Buffer.from("chunked-file-content-".repeat(6000));
     const chunkSize = 50 * 1024;
     const totalChunks = Math.ceil(chunkedBytes.length / chunkSize);

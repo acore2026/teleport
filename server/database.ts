@@ -22,7 +22,8 @@ db.exec(`
     hash TEXT NOT NULL,
     encrypted INTEGER NOT NULL DEFAULT 0,
     crypto_meta TEXT,
-    text_encoding TEXT
+    text_encoding TEXT,
+    pinned INTEGER NOT NULL DEFAULT 0
   );
   CREATE INDEX IF NOT EXISTS idx_room_items_room_expires ON room_items(room, expires_at);
 `);
@@ -38,6 +39,9 @@ if (!columns.has("crypto_meta")) {
 }
 if (!columns.has("text_encoding")) {
   db.exec("ALTER TABLE room_items ADD COLUMN text_encoding TEXT");
+}
+if (!columns.has("pinned")) {
+  db.exec("ALTER TABLE room_items ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
 }
 
 export const insertItem = db.prepare(`
@@ -62,10 +66,11 @@ export const selectItems = db.prepare(`
     expires_at AS expiresAt,
     hash,
     encrypted,
-    crypto_meta AS cryptoMeta
+    crypto_meta AS cryptoMeta,
+    pinned
   FROM room_items
-  WHERE room = ? AND expires_at > ?
-  ORDER BY created_at DESC
+  WHERE room = ? AND (pinned = 1 OR expires_at > ?)
+  ORDER BY pinned DESC, created_at DESC
 `);
 export const selectItem = db.prepare(`
   SELECT
@@ -82,20 +87,31 @@ export const selectItem = db.prepare(`
     expires_at AS expiresAt,
     hash,
     encrypted,
-    crypto_meta AS cryptoMeta
+    crypto_meta AS cryptoMeta,
+    pinned
   FROM room_items
-  WHERE room = ? AND id = ? AND expires_at > ?
+  WHERE room = ? AND id = ? AND (pinned = 1 OR expires_at > ?)
 `);
 export const selectExpiredItems = db.prepare(`
   SELECT id, room, file_path AS filePath
   FROM room_items
-  WHERE expires_at <= ?
+  WHERE pinned = 0 AND expires_at <= ?
 `);
-export const deleteExpired = db.prepare("DELETE FROM room_items WHERE expires_at <= ?");
+export const deleteExpired = db.prepare("DELETE FROM room_items WHERE pinned = 0 AND expires_at <= ?");
 export const deleteItem = db.prepare("DELETE FROM room_items WHERE room = ? AND id = ?");
 export const selectItemForDelete = db.prepare(`
   SELECT id, room, file_path AS filePath
   FROM room_items
   WHERE room = ? AND id = ?
 `);
-export const deleteExpiredForRoom = db.prepare("DELETE FROM room_items WHERE room = ? AND expires_at <= ?");
+export const selectItemForPin = db.prepare(`
+  SELECT id, expires_at AS expiresAt, pinned
+  FROM room_items
+  WHERE room = ? AND id = ? AND (pinned = 1 OR expires_at > ?)
+`);
+export const updateItemPin = db.prepare(`
+  UPDATE room_items SET pinned = ?, expires_at = ? WHERE room = ? AND id = ?
+`);
+export const deleteExpiredForRoom = db.prepare(
+  "DELETE FROM room_items WHERE room = ? AND pinned = 0 AND expires_at <= ?",
+);

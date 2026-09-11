@@ -10,6 +10,7 @@ function serializeItem(row: RoomItemRow): Record<string, unknown> {
     createdAt: row.createdAt,
     expiresAt: row.expiresAt,
     hash: row.hash,
+    pinned: Boolean(row.pinned),
     encrypted: Boolean(row.encrypted),
     cryptoMeta: row.cryptoMeta ? JSON.parse(row.cryptoMeta) : null,
   };

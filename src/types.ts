@@ -10,6 +10,7 @@ export type RoomItem =
       bytes: number;
       createdAt: number;
       expiresAt: number;
+      pinned: boolean;
       hash: string;
       encrypted?: boolean;
       cryptoMeta?: CryptoEnvelope | null;
@@ -24,6 +25,7 @@ export type RoomItem =
       downloadUrl: string;
       createdAt: number;
       expiresAt: number;
+      pinned: boolean;
       hash: string;
       encrypted?: boolean;
       cryptoMeta?: CryptoEnvelope | null;

@@ -63,6 +63,7 @@ export function MiniWindow({ model }: { model: TeleportModel }) {
     handleDragOver,
     handleDrop,
     deleteItem,
+    togglePin,
     copyItem,
     downloadItem,
     startMiniWindowDrag,
@@ -257,6 +258,7 @@ export function MiniWindow({ model }: { model: TeleportModel }) {
                       isCopied={copiedItemId === item.id}
                       onCopy={copyItem}
                       onDelete={deleteItem}
+                      onTogglePin={togglePin}
                       onDownload={downloadItem}
                       onPreview={setExpandedImage}
                       getItemUrl={(itemUrl) => absoluteItemUrl(itemUrl, serverUrl)}

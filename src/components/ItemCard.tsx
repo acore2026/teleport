@@ -1,4 +1,4 @@
-import { Check, Copy, Download, Trash2 } from "lucide-react";
+import { Check, Copy, Download, Pin, PinOff, Trash2 } from "lucide-react";
 import { fileIconFor, isPreviewableImage } from "../lib/files";
 import { formatBytes, timeAgo, timeLeft } from "../lib/format";
 import type { RoomItem } from "../types";
@@ -7,6 +7,7 @@ export function ItemCard({
   item,
   onCopy,
   onDelete,
+  onTogglePin,
   onDownload,
   onPreview,
   getItemUrl,
@@ -16,6 +17,7 @@ export function ItemCard({
   isCopied: boolean;
   onCopy: (item: RoomItem) => void;
   onDelete: (item: RoomItem) => void;
+  onTogglePin: (item: RoomItem) => void;
   onDownload: (item: RoomItem) => void;
   onPreview: (item: Extract<RoomItem, { type: "file" }>) => void;
   getItemUrl: (downloadUrl: string) => string;
@@ -26,8 +28,8 @@ export function ItemCard({
   const isImage = isPreviewableImage(item);
   const meta =
     item.type === "file"
-      ? [formatBytes(item.fileSize), icon.label, timeLeft(item.expiresAt)]
-      : [timeAgo(item.createdAt), timeLeft(item.expiresAt)];
+      ? [formatBytes(item.fileSize), icon.label, item.pinned ? "Pinned" : timeLeft(item.expiresAt)]
+      : [timeAgo(item.createdAt), item.pinned ? "Pinned" : timeLeft(item.expiresAt)];
 
   return (
     <li className={isCopied ? "item-card item-card-copied" : "item-card"}>
@@ -55,6 +57,15 @@ export function ItemCard({
       </div>
       <div className="item-actions">
         <button
+          className={item.pinned ? "pin-action pin-action-active" : "pin-action"}
+          onClick={() => onTogglePin(item)}
+          title={item.pinned ? "Unpin and restart expiry" : "Pin to prevent expiry"}
+          aria-label={item.pinned ? `Unpin ${title}` : `Pin ${title}`}
+        >
+          {item.pinned ? <PinOff size={15} /> : <Pin size={15} />}
+          <span>{item.pinned ? "Unpin" : "Pin"}</span>
+        </button>
+        <button
           className={isCopied ? "copy-action copy-action-done" : "copy-action"}
           onClick={() => onCopy(item)}
         >
@@ -79,6 +90,7 @@ export function MiniItemCard({
   item,
   onCopy,
   onDelete,
+  onTogglePin,
   onDownload,
   onPreview,
   getItemUrl,
@@ -88,6 +100,7 @@ export function MiniItemCard({
   isCopied: boolean;
   onCopy: (item: RoomItem) => void;
   onDelete: (item: RoomItem) => void;
+  onTogglePin: (item: RoomItem) => void;
   onDownload: (item: RoomItem) => void;
   onPreview: (item: Extract<RoomItem, { type: "file" }>) => void;
   getItemUrl: (downloadUrl: string) => string;
@@ -121,12 +134,20 @@ export function MiniItemCard({
         <span className="mini-item-copy">
           <strong>{title}</strong>
           <small>
-            {meta} · {timeLeft(item.expiresAt)}
+            {meta} · {item.pinned ? "Pinned" : timeLeft(item.expiresAt)}
           </small>
           {item.type === "text" && <em>{item.textContent || "Locked text paste"}</em>}
         </span>
       </button>
       <div className="mini-item-actions">
+        <button
+          className={item.pinned ? "mini-pin-active" : undefined}
+          onClick={() => onTogglePin(item)}
+          title={item.pinned ? "Unpin and restart expiry" : "Pin to prevent expiry"}
+          aria-label={item.pinned ? `Unpin ${title}` : `Pin ${title}`}
+        >
+          {item.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+        </button>
         {item.type === "file" ? (
           <>
             <button

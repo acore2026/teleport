@@ -1207,6 +1207,12 @@ button {
   color: #6d28d9;
 }
 
+.item-actions .pin-action-active {
+  border-color: #c4b5fd;
+  background: #f5f3ff;
+  color: #6d28d9;
+}
+
 .item-actions .primary-action:hover,
 .item-actions .copy-action:hover {
   border-color: #7c3aed;
@@ -1885,6 +1891,12 @@ button {
 .mini-item-actions button:hover {
   border-color: #c4b5fd;
   background: #f5f3ff;
+}
+
+.mini-item-actions .mini-pin-active {
+  border-color: #c4b5fd;
+  background: #f5f3ff;
+  color: #6d28d9;
 }
 
 .mini-item-actions .mini-danger {

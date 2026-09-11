@@ -17,6 +17,13 @@ export type RoomItemRow = {
   hash: string;
   encrypted: 0 | 1;
   cryptoMeta: string | null;
+  pinned: 0 | 1;
+};
+
+export type PinnableItemRow = {
+  id: string;
+  expiresAt: number;
+  pinned: 0 | 1;
 };
 
 export type ExpiredItemRow = {

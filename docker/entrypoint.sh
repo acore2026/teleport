@@ -19,11 +19,9 @@ shutdown() {
 
 trap 'shutdown; exit 143' INT TERM
 
-if wait -n "$node_pid" "$nginx_pid"; then
-  status=0
-else
-  status="$?"
-fi
+while kill -0 "$node_pid" 2>/dev/null && kill -0 "$nginx_pid" 2>/dev/null; do
+  sleep 1
+done
 
 shutdown
-exit "$status"
+exit 1

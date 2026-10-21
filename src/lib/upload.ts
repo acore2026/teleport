@@ -4,8 +4,6 @@ import { base64FromBytes } from "./text-codec";
 
 type UploadOptions = {
   room: string;
-  serverUrl: string;
-  desktopMode: boolean;
   chunkSizeBytes: number | null;
   onProgress: (progress: UploadProgress) => void;
 };
@@ -38,7 +36,6 @@ function createUploadId() {
 function sendUpload(
   url: string,
   body: FormData | string,
-  desktopMode: boolean,
   onProgress: (loaded: number) => void,
 ) {
   return new Promise<UploadResponse>((resolve, reject) => {
@@ -60,7 +57,7 @@ function sendUpload(
       }
     };
     request.onerror = () => {
-      reject(desktopMode ? new ProxyChallengeError(url) : new Error("Upload failed."));
+      reject(new Error("Upload failed."));
     };
     request.open("POST", url);
     if (typeof body === "string") request.setRequestHeader("content-type", "application/json");
@@ -93,11 +90,11 @@ function reportProgress(
 }
 
 async function uploadWholeFile(file: File, index: number, totalFiles: number, options: UploadOptions) {
-  const uploadUrl = apiUrl(`/api/rooms/${encodeURIComponent(options.room)}/items`, options.serverUrl);
+  const uploadUrl = apiUrl(`/api/rooms/${encodeURIComponent(options.room)}/items`);
   const form = new FormData();
   form.append("file", file);
   reportProgress(file, index, totalFiles, options.onProgress, 0);
-  const response = await sendUpload(uploadUrl, form, options.desktopMode, (loaded) => {
+  const response = await sendUpload(uploadUrl, form, (loaded) => {
     reportProgress(file, index, totalFiles, options.onProgress, loaded);
   });
   if (response.status < 200 || response.status >= 300 || "error" in response.payload) {
@@ -113,7 +110,6 @@ async function uploadInChunks(file: File, index: number, totalFiles: number, opt
   const uploadId = createUploadId();
   const uploadUrl = apiUrl(
     `/api/rooms/${encodeURIComponent(options.room)}/uploads/${encodeURIComponent(uploadId)}/chunks`,
-    options.serverUrl,
   );
   let finalPayload: RoomPayload | null = null;
 
@@ -132,7 +128,7 @@ async function uploadInChunks(file: File, index: number, totalFiles: number, opt
     });
     reportProgress(file, index, totalFiles, options.onProgress, offset, chunkIndex + 1, totalChunks);
 
-    const response = await sendUpload(uploadUrl, body, options.desktopMode, (loaded) => {
+    const response = await sendUpload(uploadUrl, body, (loaded) => {
       reportProgress(
         file,
         index,

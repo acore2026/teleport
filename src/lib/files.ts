@@ -1,4 +1,4 @@
-import type { LucideIcon } from "lucide-react";
+import type { Component } from "vue";
 import {
   Clipboard,
   FileArchive,
@@ -10,7 +10,7 @@ import {
   FileSpreadsheet,
   FileText,
   FileVideo,
-} from "lucide-react";
+} from "lucide-vue-next";
 import type { RoomItem } from "../types";
 
 function fileExtension(fileName: string) {
@@ -18,7 +18,7 @@ function fileExtension(fileName: string) {
   return match?.[1]?.toLowerCase() || "";
 }
 
-export function fileIconFor(item: RoomItem): { Icon: LucideIcon; tone: string; label: string } {
+export function fileIconFor(item: RoomItem): { Icon: Component; tone: string; label: string } {
   if (item.type === "text") return { Icon: Clipboard, tone: "text", label: "text" };
 
   const extension = fileExtension(item.fileName);

@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository contains `teleport`, a room-based paste and file sync app. The React/Vite frontend lives in `src/`, with the bootstrap in `src/main.tsx`, layouts in `src/components/`, behavior in `src/hooks/`, helpers in `src/lib/`, and global styling in `src/styles.css`. The TypeScript Node/Express API, SQLite storage, upload handling, SSE room updates, and static asset serving are in `server/`. Production container files are in `docker/`, `Dockerfile`, and `docker-compose.yml`. README screenshots and design references live in `docs/assets/`. Runtime data is stored under `data/` locally, or `/app/data` in Docker; do not commit uploaded files or SQLite databases.
+This repository contains `teleport`, a room-based paste and file sync app. The Vue/Vite frontend lives in `src/`, with the bootstrap in `src/main.ts`, single-file components in `src/components/`, behavior in `src/composables/`, helpers in `src/lib/`, and global styling in `src/styles.css`. The TypeScript Node/Express API, SQLite storage, upload handling, SSE room updates, and static asset serving are in `server/`. Production container files are in `docker/`, `Dockerfile`, and `docker-compose.yml`. README screenshots and design references live in `docs/assets/`. Runtime data is stored under `data/` locally, or `/app/data` in Docker; do not commit uploaded files or SQLite databases.
 
 ## Build, Test, and Development Commands
 
@@ -15,7 +15,7 @@ This repository contains `teleport`, a room-based paste and file sync app. The R
 
 ## Coding Style & Naming Conventions
 
-Use TypeScript/React for frontend code and TypeScript ESM for the server. Keep indentation at two spaces, prefer `const` over `let`, and use descriptive camelCase names for functions, variables, and React state. React components use PascalCase. Keep rendering in `src/components/`, stateful behavior in focused `src/hooks/`, and reusable helpers in `src/lib/`. Keep `src/main.tsx` limited to bootstrapping. Use existing lucide icons and the current light, minimal design language.
+Use Vue 3 single-file components with `<script setup lang="ts">`, Composition API composables, and TypeScript ESM for the server. Keep indentation at two spaces, prefer `const` over `let`, and use descriptive camelCase names for functions, variables, and reactive state. Components use PascalCase. Keep rendering in `src/components/`, stateful behavior in focused `src/composables/`, and reusable helpers in `src/lib/`. Keep `src/main.ts` limited to bootstrapping. Use existing lucide icons and the current light, minimal design language.
 
 ## Testing Guidelines
 

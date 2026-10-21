@@ -1,5 +1,3 @@
-import { Image } from "@tauri-apps/api/image";
-
 export type RoomItem =
   | {
       id: string;
@@ -56,11 +54,6 @@ export type ProxyChallenge = {
   detectedAt: number;
 };
 
-export type ClipboardSnapshot =
-  | { type: "text"; text: string; signature: string }
-  | { type: "image"; image: Image; signature: string }
-  | { type: "empty" };
-
 export type RecentRoom = {
   room: string;
   at: number;
@@ -70,20 +63,6 @@ export type NewItemNotice = {
   id: string;
   title: string;
   detail: string;
-};
-
-export type DesktopShortcuts = {
-  openPanel: string;
-  copy: string;
-  paste: string;
-};
-
-export type DesktopStateSync = {
-  room?: string;
-  serverUrl?: string;
-  roomPassword?: string;
-  chunkUploadsEnabled?: boolean;
-  chunkSizeKb?: number;
 };
 
 export type CryptoEnvelope = {

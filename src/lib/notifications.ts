@@ -1,4 +1,3 @@
-import { notificationLeaseKey } from "../config";
 import type { RoomItem } from "../types";
 import { formatBytes } from "./format";
 import { readCachedText } from "./room-storage";
@@ -36,25 +35,4 @@ export function notificationDetailFor(items: RoomItem[], room: string) {
     return `${parts.join(", ")} · Latest: ${first}`;
   }
   return itemNotificationLabel(items[0], room);
-}
-
-export function tryClaimNotification(items: RoomItem[], room: string) {
-  const ids = items
-    .map((item) => item.id)
-    .sort()
-    .join(",");
-  const key = `${room}:${ids}`;
-  const now = Date.now();
-  try {
-    const current = JSON.parse(localStorage.getItem(notificationLeaseKey) || "null") as {
-      key?: string;
-      expiresAt?: number;
-    } | null;
-    if (current?.key === key && Number(current.expiresAt) > now) return false;
-
-    localStorage.setItem(notificationLeaseKey, JSON.stringify({ key, expiresAt: now + 8000 }));
-    return true;
-  } catch {
-    return true;
-  }
 }

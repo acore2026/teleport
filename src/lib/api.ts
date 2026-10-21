@@ -1,13 +1,13 @@
 import { proxyChallengeMessage } from "../config";
 import type { RoomPayload } from "../types";
 
-export function apiUrl(path: string, serverUrl: string) {
-  return serverUrl ? `${serverUrl}${path}` : path;
+export function apiUrl(path: string) {
+  return path;
 }
 
-export function absoluteItemUrl(downloadUrl: string, serverUrl: string) {
+export function absoluteItemUrl(downloadUrl: string) {
   if (/^https?:\/\//i.test(downloadUrl)) return downloadUrl;
-  return serverUrl ? `${serverUrl}${downloadUrl}` : new URL(downloadUrl, window.location.href).href;
+  return new URL(downloadUrl, window.location.href).href;
 }
 
 export class ProxyChallengeError extends Error {
@@ -29,19 +29,6 @@ export function looksLikeProxyChallenge(text: string) {
     source.includes('id="continuebtn"') ||
     source.includes("接受风险并访问") ||
     source.includes("proxyaccess/lst")
-  );
-}
-
-export function looksLikeBlockedRedirect(caught: unknown) {
-  if (caught instanceof TypeError) return true;
-  if (!(caught instanceof Error)) return false;
-  const message = caught.message.toLowerCase();
-  return (
-    message.includes("failed to fetch") ||
-    message.includes("load failed") ||
-    message.includes("networkerror") ||
-    message.includes("err_failed") ||
-    message.includes("cors")
   );
 }
 

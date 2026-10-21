@@ -1,10 +1,9 @@
 # teleport
 
 [![CI](https://github.com/acore2026/teleport/actions/workflows/ci.yml/badge.svg)](https://github.com/acore2026/teleport/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/acore2026/teleport?label=release)](https://github.com/acore2026/teleport/releases)
 [![Docker](https://img.shields.io/badge/GHCR-teleport-6d4aff)](https://github.com/acore2026/teleport/pkgs/container/teleport)
 
-**teleport** is a fast room-based paste and file shuttle for web and desktop. Create or join a room, paste text, drop files, and every connected client sees the same recent items instantly. Items expire automatically after 24 hours, so rooms stay lightweight.
+**teleport** is a fast room-based paste and file shuttle for the web. Create or join a room, paste text, drop files, and every connected client sees the same recent items instantly. Items expire automatically after 24 hours, so rooms stay lightweight.
 
 ![teleport interface](docs/assets/teleport-ui.png)
 
@@ -16,8 +15,6 @@
 - 24-hour auto-destroy for every item.
 - Lightweight room model: no account system, no device list, no generated share flow.
 - Client-side text encryption before upload; files are transferred and stored as uploaded.
-- Desktop tray/minified mode for Windows, Linux, and macOS.
-- Desktop clipboard automation: capture clipboard text/images and copy incoming text/images.
 - Production Docker image with nginx in front of the Node API.
 
 ## Quick Start With Docker
@@ -47,32 +44,12 @@ docker run -d \
 
 The container serves the web UI on port `7777`, proxies `/api/*` to the internal Node server, and accepts files up to `200 MB`.
 
-## Desktop Clients
-
-Standalone desktop builds are published on the [GitHub Releases](https://github.com/acore2026/teleport/releases) page:
-
-- `teleport-windows-x64-standalone.zip`
-- `teleport-linux-x64-standalone.tar.gz`
-- `teleport-macos-x64-standalone.tar.gz`
-- `teleport-macos-arm64-standalone.tar.gz`
-
-The desktop app starts in minified mode by default. Use the tray/status icon to open the compact panel, paste directly, copy/download recent items, or open the full window.
-
-Desktop settings include:
-
-- Server address.
-- Minified mode toggle.
-- Global shortcut bindings.
-- Clipboard capture.
-- Auto-copy incoming text/images.
-
 ## Local Development
 
 Requirements:
 
 - Node.js `24+`
 - npm
-- Rust stable and Tauri prerequisites for desktop builds
 
 Install dependencies:
 
@@ -98,42 +75,19 @@ Run the compiled server:
 npm start
 ```
 
-Run the desktop client in development:
-
-```bash
-npm run desktop:dev
-```
-
-Check the desktop project:
-
-```bash
-npm run desktop:check
-```
-
-Build standalone desktop binaries:
-
-```bash
-npm run desktop:standalone:linux
-npm run desktop:standalone:windows
-npm run desktop:standalone:macos:x64
-npm run desktop:standalone:macos:arm64
-```
-
-Linux desktop builds require WebKitGTK and appindicator development packages. macOS target builds must run on macOS. The CI workflow documents the packages and runners used for each platform.
-
 ## Verification
 
-Run `npm test` to build both applications and exercise the room API, SSE updates, file download, deletion, and 24-hour expiry cleanup against temporary SQLite storage.
+Run `npm test` to build the frontend and server and exercise the room API, SSE updates, file download, deletion, and 24-hour expiry cleanup against temporary SQLite storage.
 
 ## Project Structure
 
 ```text
-src/                 React/Vite frontend
-src/main.tsx         React bootstrap
-src/App.tsx          Selects the full workspace or desktop mini window
+src/                 Vue/Vite frontend
+src/main.ts          Vue bootstrap
+src/App.vue          Renders the web workspace
 src/components/      Layouts, room forms, item cards, and prompts
-src/hooks/           Room feed, text cache, clipboard, and app coordination
-src/lib/             API, uploads, text codec, storage, and desktop helpers
+src/composables/     Room feed, text cache, and app coordination
+src/lib/             API, uploads, text codec, storage, and clipboard helpers
 src/types.ts         Frontend domain types
 src/config.ts        Client defaults and persistent setting keys
 public/favicon.svg   Browser tab icon
@@ -146,10 +100,9 @@ server/events.ts     SSE channels and broadcasts
 server/cleanup.ts    Expired item and file cleanup
 server/files.ts      File naming, hashing, and removal
 server/config.ts     Runtime paths, limits, and environment settings
-src-tauri/           Tauri desktop client
 docker/              nginx config and container entrypoint
 docs/assets/         README screenshots and design references
-.github/workflows/   CI, Docker publish, and release builds
+.github/workflows/   CI and Docker image publishing
 data/                Local runtime data, ignored by git
 ```
 
@@ -157,19 +110,14 @@ data/                Local runtime data, ignored by git
 
 Web/server runtime data is stored under `data/` locally. In Docker, keep the `/app/data` volume mounted so uploads and SQLite data survive container replacement.
 
-Desktop standalone settings are stored in the operating system app config directory for `dev.teleport.desktop`, not next to the executable:
-
-- Windows: `%APPDATA%\dev.teleport.desktop\settings.json`
-- Linux: `~/.config/dev.teleport.desktop/settings.json` or `$XDG_CONFIG_HOME/dev.teleport.desktop/settings.json`
-
-Room passwords use the OS credential store when available. Browser-only usage falls back to local browser storage.
+Room passwords and upload preferences are stored in the browser.
 
 ## GitHub Builds And Releases
 
 The repository ships with two workflows:
 
-- `CI`: checks the web/server build, Docker image build, and desktop Tauri project.
-- `Publish`: publishes the Docker image to GitHub Container Registry and uploads Windows/Linux/macOS standalone clients to GitHub Releases.
+- `CI`: checks the web/server build and Docker image build.
+- `Publish`: publishes the Docker image to GitHub Container Registry.
 
 Publish a release:
 
